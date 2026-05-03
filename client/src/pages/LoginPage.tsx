@@ -23,7 +23,7 @@ export default function LoginPage() {
       if (res.data?.access_token && res.data?.refresh_token) {
         await setTokens(res.data.access_token, res.data.refresh_token);
         // 获取用户信息并更新状态
-        await useAuthStore.getState().fetchMe();
+        await useAuthStore.getState().fetchUser();
       }
       navigate("/");
     } catch (err: any) {

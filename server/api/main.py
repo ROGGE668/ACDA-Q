@@ -138,7 +138,7 @@ async def health_check():
 
     # Celery check
     try:
-        inspect = celery_app.control.inspect()
+        inspect = celery_app.control.inspect(timeout=2.0)
         ping = inspect.ping()
         checks["celery"] = "ok" if ping else "no_workers"
         if not ping:

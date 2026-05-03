@@ -3,7 +3,7 @@ import { useEffect } from "react";
 import { useAuthStore } from "../stores/authStore";
 
 export default function Layout() {
-  const { user, fetchMe, logout } = useAuthStore();
+  const { user, fetchUser: fetchMe, logout } = useAuthStore();
   const navigate = useNavigate();
   const location = useLocation();
 

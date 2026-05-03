@@ -47,12 +47,20 @@ let cachedFingerprint: string | null = null;
 async function getDeviceFingerprint(): Promise<string | null> {
   if (cachedFingerprint) return cachedFingerprint;
   try {
+    // 优先使用 Tauri 原生接口获取硬件指纹
     const fp = await invoke<string>("get_device_fingerprint");
     cachedFingerprint = fp;
     return fp;
   } catch (e) {
-    debug("Failed to get device fingerprint:", e);
-    return null;
+    // 降级：非 Tauri 环境使用浏览器指纹
+    debug("Tauri fingerprint unavailable, using fallback:", e);
+    try {
+      const fallback = `${navigator.userAgent}|${screen.width}x${screen.height}|${navigator.language}`;
+      cachedFingerprint = fallback;
+      return fallback;
+    } catch (_) {
+      return null;
+    }
   }
 }
 

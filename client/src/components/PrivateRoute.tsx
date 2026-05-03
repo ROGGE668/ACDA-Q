@@ -2,9 +2,9 @@ import { Navigate } from "react-router-dom";
 import { useAuthStore } from "../stores/authStore";
 
 export default function PrivateRoute({ children }: { children: React.ReactNode }) {
-  const { user, initialized } = useAuthStore();
+  const { user, isLoading } = useAuthStore();
 
-  if (!initialized) {
+  if (isLoading) {
     return (
       <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100vh" }}>
         <div>加载中...</div>

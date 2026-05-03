@@ -1,82 +1,114 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
-function getOsType(): string {
-  const ua = navigator.userAgent.toLowerCase();
-  if (ua.includes("win")) return "windows";
-  if (ua.includes("mac")) return "macos";
-  if (ua.includes("linux")) return "linux";
-  return "unknown";
-}
+import { persist } from "zustand/middleware";
 import { authAPI, deviceAPI } from "../services/api";
-import { clearTokens, onTokenSync } from "./tokenStore";
+import { setTokens, clearTokens, getAccessToken } from "./tokenStore";
 
 interface User {
   id: string;
   email: string;
-  nickname?: string;
+  nickname: string;
   tier: string;
-  quota_ai_daily?: number;
-  ai_used_today?: number;
-  quota_backtest_daily?: number;
+  is_admin: boolean;
+  quota_ai_daily: number;
+  ai_used_today: number;
+  created_at: string;
 }
 
 interface AuthState {
   user: User | null;
-  initialized: boolean;
-  setUser: (user: User | null) => void;
-  fetchMe: () => Promise<void>;
-  logout: () => void;
+  isAuthenticated: boolean;
+  isLoading: boolean;
   init: () => Promise<void>;
+  login: (email: string, password: string) => Promise<void>;
+  register: (email: string, password: string, nickname?: string) => Promise<void>;
+  logout: () => Promise<void>;
+  fetchUser: () => Promise<void>;
 }
 
-async function registerDevice() {
+export const useAuthStore = create<AuthState>()(
+  persist(
+    (set, get) => ({
+      user: null,
+      isAuthenticated: false,
+      isLoading: false,
+
+      init: async () => {
+        const token = await getAccessToken();
+        if (token) {
+          await get().fetchUser();
+        }
+      },
+
+      login: async (email, password) => {
+        set({ isLoading: true });
+        try {
+          const res = await authAPI.login(email, password);
+          const { access_token, refresh_token } = res.data;
+          await setTokens(access_token, refresh_token);
+          await get().fetchUser();
+        } finally {
+          set({ isLoading: false });
+        }
+      },
+
+      register: async (email, password, nickname) => {
+        set({ isLoading: true });
+        try {
+          const res = await authAPI.register(email, password, nickname);
+          const { access_token, refresh_token } = res.data;
+          await setTokens(access_token, refresh_token);
+          await get().fetchUser();
+        } finally {
+          set({ isLoading: false });
+        }
+      },
+
+      logout: async () => {
+        try {
+          await authAPI.logout();
+        } catch (_) {
+          // ignore
+        }
+        await clearTokens();
+        set({ user: null, isAuthenticated: false });
+        window.location.href = "/login";
+      },
+
+      fetchUser: async () => {
+        try {
+          const res = await authAPI.me();
+          set({ user: res.data, isAuthenticated: true });
+          // 登录成功后自动注册设备
+          await registerDeviceIfNeeded();
+        } catch (e) {
+          set({ user: null, isAuthenticated: false });
+          await clearTokens();
+        }
+      },
+    }),
+    {
+      name: "auth-store",
+      partialize: (state) => ({ user: state.user, isAuthenticated: state.isAuthenticated }),
+    }
+  )
+);
+
+async function registerDeviceIfNeeded() {
   try {
-    const fingerprint = await invoke<string>("get_device_fingerprint");
-    const osType = getOsType();
+    let fingerprint: string;
+    try {
+      fingerprint = await invoke<string>("get_device_fingerprint");
+    } catch (e) {
+      // 非 Tauri 环境使用降级指纹
+      fingerprint = `${navigator.userAgent}|${screen.width}x${screen.height}|${navigator.language}`;
+    }
     await deviceAPI.register({
       device_fingerprint: fingerprint,
-      device_name: `${osType} Device`,
-      os_type: osType,
+      device_name: "ACDA-Quant Client",
+      device_type: "desktop",
     });
   } catch (e) {
-    console.error("Device registration failed:", e);
+    console.warn("[Device] register failed:", e);
   }
 }
-
-export const useAuthStore = create<AuthState>((set) => ({
-  user: null,
-  initialized: false,
-  setUser: (user) => set({ user }),
-  fetchMe: async () => {
-    const { data } = await authAPI.me();
-    set({ user: data });
-    await registerDevice();
-  },
-  logout: async () => {
-    await clearTokens();
-    set({ user: null });
-  },
-  init: async () => {
-    const token = localStorage.getItem("access_token");
-    if (token) {
-      try {
-        const { data } = await authAPI.me();
-        set({ user: data, initialized: true });
-        await registerDevice();
-        return;
-      } catch {
-        // token 无效，清理
-        await clearTokens();
-      }
-    }
-    set({ initialized: true });
-  },
-}));
-
-// Multi-tab sync: if another tab refreshes token, re-fetch user info
-onTokenSync(() => {
-  const { user, fetchMe } = useAuthStore.getState();
-  if (user) {
-    fetchMe().catch(() => {});
-  }
-});

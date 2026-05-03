@@ -100,7 +100,7 @@ async def check_backtest_quota(
     r = _get_redis()
     try:
         used = int(await r.get(_quota_key(str(current_user.id), "backtest", today)) or 0)
-        if used >= current_user.quota_ai_daily:
+        if used >= current_user.quota_backtest_daily:
             raise HTTPException(status_code=429, detail="Daily backtest quota exceeded")
     finally:
         await r.close()

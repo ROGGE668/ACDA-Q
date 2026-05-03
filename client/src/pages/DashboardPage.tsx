@@ -86,7 +86,7 @@ export default function DashboardPage() {
         <div className="card">
           <h3>今日额度（已用/总额）</h3>
           <p style={{ fontSize: "1.5rem", marginTop: "0.5rem" }}>
-            AI: {user?.ai_used_today ?? 0}/{user?.quota_ai_daily ?? "--"} / 回测: {user?.quota_backtest_daily ?? "--"}
+            AI: {user?.ai_used_today ?? 0}/{user?.quota_ai_daily ?? "--"} / 回测: {user?.quota_ai_daily ?? "--"}
           </p>
         </div>
       </div>
