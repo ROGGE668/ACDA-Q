@@ -45,6 +45,7 @@ class Settings(BaseSettings):
 
     class Config:
         env_file = ".env"
+        extra = "ignore"  # 忽略 .env 里多余的字段(POSTGRES_USER 等是给 postgres 容器用的,不是 Settings 字段)
 
     @model_validator(mode="after")
     def check_security_settings(self):
