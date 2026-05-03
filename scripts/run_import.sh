@@ -1,0 +1,2 @@
+#!/bin/sh
+/usr/local/bin/docker exec jzhu-trading-db-1 psql -U trading -d trading_platform -c "COPY (SELECT k.symbol, k.ts, k.open, k.high, k.low, k.close, k.volume FROM kline_daily k INNER JOIN stock_basic s ON k.symbol = s.symbol WHERE s.market='CN') TO STDOUT WITH CSV" | /usr/local/bin/docker exec -i quant_timescaledb psql -U quant -d quant_market -c "COPY daily_bars(symbol, datetime, open, high, low, close, volume) FROM STDIN WITH CSV"

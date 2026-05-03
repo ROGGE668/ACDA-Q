@@ -1,0 +1,95 @@
+name: Deploy to Server
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+          log-public-key: false
+
+      - name: Add server to known_hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H ${{ secrets.SERVER_IP }} >> ~/.ssh/known_hosts
+
+      - name: Deploy to server
+        env:
+          SERVER_IP: ${{ secrets.SERVER_IP }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          REMOTE_DIR: ${{ secrets.REMOTE_DIR || '~/ACDA-Q' }}
+        run: |
+          echo "=== Syncing code to server ==="
+          rsync -avz --delete \
+            -e "ssh -o StrictHostKeyChecking=yes" \
+            --exclude='.git' \
+            --exclude='client/node_modules' \
+            --exclude='client/dist' \
+            --exclude='client/src-tauri/target' \
+            --exclude='__pycache__' \
+            --exclude='*.pyc' \
+            --exclude='.env' \
+            ./ \
+            $SERVER_USER@$SERVER_IP:$REMOTE_DIR/
+
+          echo "=== Running remote deployment ==="
+          ssh $SERVER_USER@$SERVER_IP bash -s << 'REMOTE_SCRIPT'
+            set -e
+            REMOTE_DIR="${REMOTE_DIR:-$HOME/ACDA-Q}"
+            COMPOSE_FILE="docker-compose.prod.yml"
+
+            cd "$REMOTE_DIR"
+
+            # Check docker compose command
+            if docker compose version &> /dev/null; then
+              DOCKER_COMPOSE="docker compose"
+            else
+              DOCKER_COMPOSE="docker-compose"
+            fi
+
+            echo "[1/4] Stopping old containers..."
+            $DOCKER_COMPOSE -f "$COMPOSE_FILE" stop api worker || true
+
+            echo "[2/4] Building images..."
+            $DOCKER_COMPOSE -f "$COMPOSE_FILE" build --no-cache api worker
+
+            echo "[3/4] Starting containers..."
+            $DOCKER_COMPOSE -f "$COMPOSE_FILE" up -d --no-deps api worker
+
+            echo "[4/4] Running migrations..."
+            sleep 5
+            $DOCKER_COMPOSE -f "$COMPOSE_FILE" exec -T api alembic upgrade head || {
+              echo "Migration failed, showing logs:"
+              $DOCKER_COMPOSE -f "$COMPOSE_FILE" logs --tail=30 api
+              exit 1
+            }
+
+            echo ""
+            echo "✅ Deployment completed!"
+            $DOCKER_COMPOSE -f "$COMPOSE_FILE" ps api worker
+          REMOTE_SCRIPT
+
+      - name: Health check
+        env:
+          SERVER_IP: ${{ secrets.SERVER_IP }}
+        run: |
+          echo "Checking API health..."
+          for i in {1..10}; do
+            if curl -sf "http://$SERVER_IP:8000/health" > /dev/null 2>&1; then
+              echo "✅ API is healthy"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "❌ API health check failed"
+          exit 1
