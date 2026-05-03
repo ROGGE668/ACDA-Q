@@ -22,9 +22,11 @@ interface User {
 
 interface AuthState {
   user: User | null;
+  initialized: boolean;
   setUser: (user: User | null) => void;
   fetchMe: () => Promise<void>;
   logout: () => void;
+  init: () => Promise<void>;
 }
 
 async function registerDevice() {
@@ -43,16 +45,31 @@ async function registerDevice() {
 
 export const useAuthStore = create<AuthState>((set) => ({
   user: null,
+  initialized: false,
   setUser: (user) => set({ user }),
   fetchMe: async () => {
     const { data } = await authAPI.me();
     set({ user: data });
-    // 登录成功后注册设备
     await registerDevice();
   },
   logout: async () => {
     await clearTokens();
     set({ user: null });
+  },
+  init: async () => {
+    const token = localStorage.getItem("access_token");
+    if (token) {
+      try {
+        const { data } = await authAPI.me();
+        set({ user: data, initialized: true });
+        await registerDevice();
+        return;
+      } catch {
+        // token 无效，清理
+        await clearTokens();
+      }
+    }
+    set({ initialized: true });
   },
 }));
 

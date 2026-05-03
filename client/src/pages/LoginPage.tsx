@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { authAPI } from "../services/api";
 import { setTokens } from "../stores/tokenStore";
+import { useAuthStore } from "../stores/authStore";
 
 export default function LoginPage() {
   const [isLogin, setIsLogin] = useState(true);
@@ -21,6 +22,8 @@ export default function LoginPage() {
       // 保存 Bearer Token
       if (res.data?.access_token && res.data?.refresh_token) {
         await setTokens(res.data.access_token, res.data.refresh_token);
+        // 获取用户信息并更新状态
+        await useAuthStore.getState().fetchMe();
       }
       navigate("/");
     } catch (err: any) {

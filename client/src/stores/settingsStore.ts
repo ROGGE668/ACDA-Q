@@ -36,8 +36,15 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       const apiBase = await store.get<string>("api_base");
       const theme = await store.get<"dark" | "light">("theme");
       const shortcut = await store.get<boolean>("global_shortcut_enabled");
+
+      // 如果 Store 中的 api_base 无效（空或 localhost），使用默认值
+      const validApiBase =
+        apiBase && !apiBase.includes("localhost") && !apiBase.includes("127.0.0.1")
+          ? apiBase
+          : get().apiBase;
+
       set({
-        apiBase: apiBase ?? get().apiBase,
+        apiBase: validApiBase,
         theme: theme ?? get().theme,
         globalShortcutEnabled: shortcut ?? get().globalShortcutEnabled,
         loaded: true,

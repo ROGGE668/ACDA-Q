@@ -1,5 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
 import { fetch } from "@tauri-apps/plugin-http";
+import { invoke } from "@tauri-apps/api/core";
 import { clearTokens, getAccessToken, getRefreshToken, setTokens } from "../stores/tokenStore";
 import { useSettingsStore } from "../stores/settingsStore";
 
@@ -101,33 +101,20 @@ async function request(method: string, url: string, data?: any, config?: any) {
     if (response.status === 401) {
       if (!config?._retry) {
         try {
-          // 优先尝试 Cookie 刷新（服务器使用 HttpOnly Cookie）
-          const refreshRes = await fetch(`${API_BASE}/auth/refresh`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-          });
-          if (refreshRes.ok) {
-            const refreshData = await refreshRes.json();
-            if (refreshData.access_token && refreshData.refresh_token) {
-              await setTokens(refreshData.access_token, refreshData.refresh_token);
-            }
-            return request(method, url, data, { ...config, _retry: true });
-          }
-
-          // Cookie 刷新失败，退回到 Header 方式（兼容旧版或跨域场景）
+          // plugin-http 不共享 WebView Cookie，直接用 Header 刷新
           const refreshTok = await getRefreshToken();
           if (refreshTok) {
-            const fallbackRes = await fetch(`${API_BASE}/auth/refresh`, {
+            const refreshRes = await fetch(`${API_BASE}/auth/refresh`, {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
                 "Authorization": `Bearer ${refreshTok}`,
               },
             });
-            if (fallbackRes.ok) {
-              const fallbackData = await fallbackRes.json();
-              if (fallbackData.access_token && fallbackData.refresh_token) {
-                await setTokens(fallbackData.access_token, fallbackData.refresh_token);
+            if (refreshRes.ok) {
+              const refreshData = await refreshRes.json();
+              if (refreshData.access_token && refreshData.refresh_token) {
+                await setTokens(refreshData.access_token, refreshData.refresh_token);
               }
               return request(method, url, data, { ...config, _retry: true });
             }

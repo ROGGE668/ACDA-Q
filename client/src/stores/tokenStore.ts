@@ -35,6 +35,9 @@ export async function setTokens(access: string, refresh: string): Promise<void> 
     await store.set("access_token", access);
     await store.set("refresh_token", refresh);
     await store.save();
+    // Sync to localStorage for PrivateRoute sync check
+    localStorage.setItem("access_token", access);
+    localStorage.setItem("refresh_token", refresh);
     broadcastTokenUpdate();
   } catch (e) {
     console.error("Failed to save tokens:", e);
@@ -48,6 +51,8 @@ export async function clearTokens(): Promise<void> {
     await store.delete("access_token");
     await store.delete("refresh_token");
     await store.save();
+    localStorage.removeItem("access_token");
+    localStorage.removeItem("refresh_token");
     broadcastTokenUpdate();
   } catch (e) {
     console.error("Failed to clear tokens:", e);

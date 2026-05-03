@@ -25,7 +25,8 @@
     "security": {
       "csp": null,
       "capabilities": ["default"]
-    }
+    },
+    "devtools": true
   },
   "bundle": {
     "active": true,

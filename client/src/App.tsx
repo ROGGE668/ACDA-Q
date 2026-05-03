@@ -1,4 +1,5 @@
 import { Routes, Route } from "react-router-dom";
+import { useEffect } from "react";
 import Layout from "./components/Layout";
 import PrivateRoute from "./components/PrivateRoute";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -13,9 +14,19 @@ import SettingsPage from "./pages/SettingsPage";
 import PrivacyPolicyPage from "./pages/PrivacyPolicyPage";
 import ProductInfoPage from "./pages/ProductInfoPage";
 import SubscriptionPage from "./pages/SubscriptionPage";
+import { useAuthStore } from "./stores/authStore";
+
+function AuthInitializer({ children }: { children: React.ReactNode }) {
+  const init = useAuthStore((s) => s.init);
+  useEffect(() => {
+    init();
+  }, [init]);
+  return <>{children}</>;
+}
 
 function App() {
   return (
+    <AuthInitializer>
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/privacy" element={<PrivacyPolicyPage />} />
@@ -32,6 +43,7 @@ function App() {
         <Route path="subscription" element={<SubscriptionPage />} />
       </Route>
     </Routes>
+    </AuthInitializer>
   );
 }
 
