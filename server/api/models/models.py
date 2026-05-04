@@ -69,8 +69,8 @@ class BacktestCache(Base):
     params = Column(JSONB, default={})
     result_summary = Column(JSONB, nullable=True)
     result_report_path = Column(String(255), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    expires_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    expires_at = Column(DateTime(timezone=True), nullable=True)
 
 
 class RefreshToken(Base):
