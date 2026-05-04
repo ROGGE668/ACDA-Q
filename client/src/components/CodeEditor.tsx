@@ -98,7 +98,7 @@ export default function CodeEditor({ value, onChange, rows = 16, maxLength }: Co
           background: "transparent",
           color: "transparent",
           caretColor: "#fff",
-          border: "1px solid #334155",
+          border: "1px solid var(--border)",
           borderRadius: "0.375rem",
           fontFamily: "inherit",
           fontSize: "inherit",

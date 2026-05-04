@@ -236,7 +236,7 @@ export default function BacktestResultPage() {
           <div style={{ maxHeight: 300, overflow: "auto", marginTop: "0.5rem" }}>
             <table style={{ width: "100%", fontSize: "0.875rem", borderCollapse: "collapse" }}>
               <thead>
-                <tr style={{ borderBottom: "1px solid #334155", textAlign: "left" }}>
+                <tr style={{ borderBottom: "1px solid var(--border)", textAlign: "left" }}>
                   <th style={{ padding: "0.25rem" }}>标的</th>
                   <th style={{ padding: "0.25rem" }}>评分</th>
                   <th style={{ padding: "0.25rem" }}>总收益</th>
@@ -247,9 +247,9 @@ export default function BacktestResultPage() {
               </thead>
               <tbody>
                 {suitableStocks.map((s: any, i: number) => (
-                  <tr key={i} style={{ borderBottom: "1px solid #1e293b" }}>
+                  <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
                     <td style={{ padding: "0.25rem" }}>{s.symbol}</td>
-                    <td style={{ padding: "0.25rem", color: s.score >= 80 ? "#22c55e" : s.score >= 60 ? "#f59e0b" : "#94a3b8" }}>{s.score}</td>
+                    <td style={{ padding: "0.25rem", color: s.score >= 80 ? "#22c55e" : s.score >= 60 ? "#f59e0b" : "var(--muted)" }}>{s.score}</td>
                     <td style={{ padding: "0.25rem" }}>{(s.total_return * 100).toFixed(2)}%</td>
                     <td style={{ padding: "0.25rem" }}>{(s.max_drawdown * 100).toFixed(2)}%</td>
                     <td style={{ padding: "0.25rem" }}>{s.sharpe_ratio?.toFixed(2)}</td>
@@ -268,7 +268,7 @@ export default function BacktestResultPage() {
           <div style={{ maxHeight: 300, overflow: "auto", marginTop: "0.5rem" }}>
             <table style={{ width: "100%", fontSize: "0.875rem", borderCollapse: "collapse" }}>
               <thead>
-                <tr style={{ borderBottom: "1px solid #334155", textAlign: "left" }}>
+                <tr style={{ borderBottom: "1px solid var(--border)", textAlign: "left" }}>
                   <th style={{ padding: "0.25rem" }}>标的</th>
                   <th style={{ padding: "0.25rem" }}>方向</th>
                   <th style={{ padding: "0.25rem" }}>时间</th>
@@ -278,7 +278,7 @@ export default function BacktestResultPage() {
               </thead>
               <tbody>
                 {signals.map((s: any, i: number) => (
-                  <tr key={i} style={{ borderBottom: "1px solid #1e293b" }}>
+                  <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
                     <td style={{ padding: "0.25rem" }}>{s.symbol}</td>
                     <td style={{ padding: "0.25rem", color: s.direction === "buy" ? "#22c55e" : "#ef4444" }}>{s.direction === "buy" ? "买入" : "卖出"}</td>
                     <td style={{ padding: "0.25rem" }}>{s.timestamp?.slice(0, 10)}</td>
@@ -329,7 +329,7 @@ export default function BacktestResultPage() {
             <h3 style={{ margin: 0 }}>K 线与交易标记 ({tradeMarkers.length}笔)</h3>
             {symbols.length > 1 && (
               <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-                <span style={{ fontSize: "0.875rem", color: "#94a3b8" }}>标的:</span>
+                <span style={{ fontSize: "0.875rem", color: "var(--muted)" }}>标的:</span>
                 <select
                   value={activeSymbol || symbols[0]}
                   onChange={(e) => setActiveSymbol(e.target.value)}
@@ -358,7 +358,7 @@ export default function BacktestResultPage() {
           <div style={{ maxHeight: 300, overflow: "auto", marginTop: "0.5rem" }}>
             <table style={{ width: "100%", fontSize: "0.875rem", borderCollapse: "collapse" }}>
               <thead>
-                <tr style={{ borderBottom: "1px solid #334155", textAlign: "left" }}>
+                <tr style={{ borderBottom: "1px solid var(--border)", textAlign: "left" }}>
                   <th style={{ padding: "0.25rem" }}>时间</th>
                   <th style={{ padding: "0.25rem" }}>标的</th>
                   <th style={{ padding: "0.25rem" }}>类型</th>
@@ -369,7 +369,7 @@ export default function BacktestResultPage() {
               </thead>
               <tbody>
                 {tradesData.items.map((t: any, i: number) => (
-                  <tr key={i} style={{ borderBottom: "1px solid #1e293b" }}>
+                  <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
                     <td style={{ padding: "0.25rem" }}>{t.timestamp?.slice(0, 10)}</td>
                     <td style={{ padding: "0.25rem" }}>{t.symbol}</td>
                     <td style={{ padding: "0.25rem", color: t.type === "buy" ? "#22c55e" : "#ef4444" }}>{t.type === "buy" ? "买入" : "卖出"}</td>
@@ -392,7 +392,7 @@ export default function BacktestResultPage() {
               >
                 上一页
               </button>
-              <span style={{ fontSize: "0.875rem", color: "#94a3b8", alignSelf: "center" }}>
+              <span style={{ fontSize: "0.875rem", color: "var(--muted)", alignSelf: "center" }}>
                 {tradesPage} / {Math.ceil(tradesData.total / tradesData.page_size)}
               </span>
               <button
@@ -414,7 +414,7 @@ export default function BacktestResultPage() {
 function Metric({ label, value, color }: { label: string; value: string | number | undefined; color?: string }) {
   return (
     <div>
-      <div style={{ fontSize: "0.75rem", color: "#94a3b8" }}>{label}</div>
+      <div style={{ fontSize: "0.75rem", color: "var(--muted)" }}>{label}</div>
       <div style={{ fontSize: "1.125rem", fontWeight: 600, color: color || "inherit" }}>{value ?? "--"}</div>
     </div>
   );
@@ -444,7 +444,7 @@ function MonthlyHeatmap({ data }: { data: any[] }) {
     <div style={{ overflowX: "auto" }}>
       {years.map((year) => (
         <div key={year} style={{ marginBottom: "0.5rem" }}>
-          <div style={{ fontSize: "0.75rem", color: "#94a3b8", marginBottom: "0.25rem" }}>{year}</div>
+          <div style={{ fontSize: "0.75rem", color: "var(--muted)", marginBottom: "0.25rem" }}>{year}</div>
           <div style={{ display: "flex", gap: "0.25rem" }}>
             {months.map((m) => {
               const item = byYear[year].find((d) => d.month.endsWith(`-${m}`));
@@ -455,7 +455,7 @@ function MonthlyHeatmap({ data }: { data: any[] }) {
                   style={{
                     width: "2rem",
                     height: "2rem",
-                    background: item ? getColor(ret) : "#1e293b",
+                    background: item ? getColor(ret) : "var(--surface)",
                     borderRadius: "0.25rem",
                     display: "flex",
                     alignItems: "center",

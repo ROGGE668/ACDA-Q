@@ -83,15 +83,15 @@ export default function StrategyBacktestPage() {
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "0.75rem" }}>
               <div>
-                <label style={{ fontSize: "0.875rem", color: "#94a3b8" }}>开始日期</label>
+                <label style={{ fontSize: "0.875rem", color: "var(--muted)" }}>开始日期</label>
                 <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
               </div>
               <div>
-                <label style={{ fontSize: "0.875rem", color: "#94a3b8" }}>结束日期</label>
+                <label style={{ fontSize: "0.875rem", color: "var(--muted)" }}>结束日期</label>
                 <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
               </div>
               <div>
-                <label style={{ fontSize: "0.875rem", color: "#94a3b8" }}>初始资金</label>
+                <label style={{ fontSize: "0.875rem", color: "var(--muted)" }}>初始资金</label>
                 <input type="number" value={initialCash} onChange={(e) => setInitialCash(Number(e.target.value))} />
               </div>
             </div>

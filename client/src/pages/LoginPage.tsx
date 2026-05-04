@@ -44,7 +44,7 @@ export default function LoginPage() {
           {error && <div style={{ color: "#ef4444", fontSize: "0.875rem" }}>{error}</div>}
           <button type="submit">{isLogin ? "登录" : "注册"}</button>
         </form>
-        <div style={{ textAlign: "center", marginTop: "1rem", fontSize: "0.875rem", color: "#94a3b8" }}>
+        <div style={{ textAlign: "center", marginTop: "1rem", fontSize: "0.875rem", color: "var(--muted)" }}>
           {isLogin ? "还没有账号？" : "已有账号？"}
           <a href="#" onClick={(e) => { e.preventDefault(); setIsLogin(!isLogin); }}>
             {isLogin ? "立即注册" : "立即登录"}

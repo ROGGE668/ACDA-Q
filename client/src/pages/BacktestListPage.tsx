@@ -105,7 +105,7 @@ export default function BacktestListPage() {
           <h3>发起新回测</h3>
           <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", marginTop: "0.75rem" }}>
             <div>
-              <label style={{ fontSize: "0.875rem", color: "#94a3b8" }}>选择策略</label>
+              <label style={{ fontSize: "0.875rem", color: "var(--muted)" }}>选择策略</label>
               <select
                 value={selectedStrategy}
                 onChange={(e) => setSelectedStrategy(e.target.value)}
@@ -128,15 +128,15 @@ export default function BacktestListPage() {
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "0.75rem" }}>
               <div>
-                <label style={{ fontSize: "0.875rem", color: "#94a3b8" }}>开始日期</label>
+                <label style={{ fontSize: "0.875rem", color: "var(--muted)" }}>开始日期</label>
                 <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
               </div>
               <div>
-                <label style={{ fontSize: "0.875rem", color: "#94a3b8" }}>结束日期</label>
+                <label style={{ fontSize: "0.875rem", color: "var(--muted)" }}>结束日期</label>
                 <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
               </div>
               <div>
-                <label style={{ fontSize: "0.875rem", color: "#94a3b8" }}>初始资金</label>
+                <label style={{ fontSize: "0.875rem", color: "var(--muted)" }}>初始资金</label>
                 <input type="number" value={initialCash} onChange={(e) => setInitialCash(Number(e.target.value))} />
               </div>
             </div>
@@ -159,7 +159,7 @@ export default function BacktestListPage() {
                   {job.symbols?.slice(0, 3).join(", ") || "全市场扫描"}
                   {job.symbols && job.symbols.length > 3 ? ` +${job.symbols.length - 3}` : ""}
                 </span>
-                <span style={{ color: "#94a3b8", marginLeft: "1rem", fontSize: "0.875rem" }}>
+                <span style={{ color: "var(--muted)", marginLeft: "1rem", fontSize: "0.875rem" }}>
                   {job.start_date?.slice(0, 10)} ~ {job.end_date?.slice(0, 10)}
                 </span>
                 {job.result_summary?.total_return !== undefined && (
@@ -200,7 +200,7 @@ export default function BacktestListPage() {
           </Link>
         ))}
         {jobs.length === 0 && (
-          <div className="card" style={{ textAlign: "center", color: "#94a3b8" }}>
+          <div className="card" style={{ textAlign: "center", color: "var(--muted)" }}>
             暂无回测记录，点击右上角「发起回测」开始。
           </div>
         )}

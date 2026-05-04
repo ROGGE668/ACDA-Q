@@ -268,10 +268,10 @@ export default function StrategyEditorPage() {
                 <span style={{ color: "#ef4444", fontSize: "0.875rem" }}>{validMsg}</span>
               )}
               {validStatus === "idle" && validMsg && (
-                <span style={{ color: "#94a3b8", fontSize: "0.875rem" }}>{validMsg}</span>
+                <span style={{ color: "var(--muted)", fontSize: "0.875rem" }}>{validMsg}</span>
               )}
             </div>
-            <span style={{ fontSize: "0.75rem", color: codeOverLimit ? "#ef4444" : "#94a3b8" }}>
+            <span style={{ fontSize: "0.75rem", color: codeOverLimit ? "#ef4444" : "var(--muted)" }}>
               {code.length} / {MAX_CODE_LENGTH}
             </span>
           </div>
@@ -284,7 +284,7 @@ export default function StrategyEditorPage() {
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: "0.75rem" }}>
               {params.map((p) => (
                 <div key={p.name}>
-                  <label style={{ fontSize: "0.875rem", color: "#94a3b8" }}>{p.name}</label>
+                  <label style={{ fontSize: "0.875rem", color: "var(--muted)" }}>{p.name}</label>
                   <input
                     type={p.type === "int" || p.type === "float" || p.type === "number" ? "number" : "text"}
                     value={p.default}
@@ -314,7 +314,7 @@ export default function StrategyEditorPage() {
             <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", marginTop: "0.75rem" }}>
 
               <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-                <label style={{ fontSize: "0.875rem", color: "#94a3b8" }}>回测模式:</label>
+                <label style={{ fontSize: "0.875rem", color: "var(--muted)" }}>回测模式:</label>
                 <select value={scope} onChange={(e) => setScope(e.target.value as any)}>
                   <option value="single">个股回测</option>
                   <option value="portfolio">组合回测</option>
@@ -324,13 +324,13 @@ export default function StrategyEditorPage() {
 
               {scope === "portfolio" && (
                 <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-                  <label style={{ fontSize: "0.875rem", color: "#94a3b8" }}>权重:</label>
+                  <label style={{ fontSize: "0.875rem", color: "var(--muted)" }}>权重:</label>
                   <select value={weightMode} onChange={(e) => setWeightMode(e.target.value)}>
                     <option value="equal">等权</option>
                     <option value="market_cap">市值加权</option>
                     <option value="custom">自定义</option>
                   </select>
-                  <label style={{ fontSize: "0.875rem", color: "#94a3b8" }}>再平衡:</label>
+                  <label style={{ fontSize: "0.875rem", color: "var(--muted)" }}>再平衡:</label>
                   <select value={rebalanceFreq} onChange={(e) => setRebalanceFreq(e.target.value)}>
                     <option value="1W">每周</option>
                     <option value="1M">每月</option>
@@ -349,15 +349,15 @@ export default function StrategyEditorPage() {
 
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "0.75rem" }}>
                 <div>
-                  <label style={{ fontSize: "0.875rem", color: "#94a3b8" }}>开始日期</label>
+                  <label style={{ fontSize: "0.875rem", color: "var(--muted)" }}>开始日期</label>
                   <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
                 </div>
                 <div>
-                  <label style={{ fontSize: "0.875rem", color: "#94a3b8" }}>结束日期</label>
+                  <label style={{ fontSize: "0.875rem", color: "var(--muted)" }}>结束日期</label>
                   <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
                 </div>
                 <div>
-                  <label style={{ fontSize: "0.875rem", color: "#94a3b8" }}>初始资金</label>
+                  <label style={{ fontSize: "0.875rem", color: "var(--muted)" }}>初始资金</label>
                   <input type="number" value={initialCash} onChange={(e) => setInitialCash(Number(e.target.value))} />
                 </div>
               </div>

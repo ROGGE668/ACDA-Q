@@ -19,8 +19,8 @@ export default function Layout() {
         style={{
           padding: "0.5rem 0.75rem",
           borderRadius: "0.375rem",
-          background: active ? "#334155" : "transparent",
-          color: active ? "#38bdf8" : "#e2e8f0",
+          background: active ? "var(--border)" : "transparent",
+          color: active ? "var(--accent)" : "var(--text)",
           fontWeight: active ? 600 : 400,
         }}
       >
@@ -31,7 +31,7 @@ export default function Layout() {
 
   return (
     <div style={{ display: "flex", height: "100vh" }}>
-      <aside style={{ width: 220, background: "#1e293b", borderRight: "1px solid #334155", padding: "1rem", display: "flex", flexDirection: "column" }}>
+      <aside style={{ width: 220, background: "var(--surface)", borderRight: "1px solid var(--border)", padding: "1rem", display: "flex", flexDirection: "column" }}>
         <div style={{ marginBottom: "1.5rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
           <div
             style={{
@@ -51,7 +51,7 @@ export default function Layout() {
           >
             AQ
           </div>
-          <span style={{ fontSize: "1.125rem", fontWeight: 700, color: "#e2e8f0", letterSpacing: "0.02em" }}>ACDA-Quant</span>
+          <span style={{ fontSize: "1.125rem", fontWeight: 700, color: "var(--text)", letterSpacing: "0.02em" }}>ACDA-Quant</span>
         </div>
         <nav style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
           {navLink("/", "仪表盘")}
@@ -62,7 +62,7 @@ export default function Layout() {
           {navLink("/settings", "设置")}
         </nav>
         <div style={{ marginTop: "auto", paddingTop: "2rem" }}>
-          <div style={{ color: "#94a3b8", fontSize: "0.75rem" }}>
+          <div style={{ color: "var(--muted)", fontSize: "0.75rem" }}>
             {user?.email}
           </div>
           <button className="secondary" style={{ marginTop: "0.5rem", width: "100%" }} onClick={() => { logout(); navigate("/login"); }}>

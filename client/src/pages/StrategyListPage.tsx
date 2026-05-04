@@ -34,7 +34,7 @@ export default function StrategyListPage() {
           <div key={s.id} className="card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <div>
               <h4>{s.name}</h4>
-              <p style={{ color: "#94a3b8", fontSize: "0.875rem" }}>{s.description || "暂无描述"}</p>
+              <p style={{ color: "var(--muted)", fontSize: "0.875rem" }}>{s.description || "暂无描述"}</p>
             </div>
             <div style={{ display: "flex", gap: "0.5rem" }}>
               <Link to={`/strategies/${s.id}`}>
@@ -47,7 +47,7 @@ export default function StrategyListPage() {
           </div>
         ))}
         {strategies.length === 0 && (
-          <div className="card" style={{ textAlign: "center", color: "#94a3b8" }}>
+          <div className="card" style={{ textAlign: "center", color: "var(--muted)" }}>
             暂无策略，点击右上角新建。
           </div>
         )}

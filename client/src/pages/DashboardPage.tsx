@@ -64,7 +64,7 @@ export default function DashboardPage() {
   return (
     <div>
       <h1>仪表盘</h1>
-      <p style={{ color: "#94a3b8", marginTop: "0.5rem" }}>
+      <p style={{ color: "var(--muted)", marginTop: "0.5rem" }}>
         欢迎回来，{user?.nickname || user?.email}
       </p>
 
@@ -103,7 +103,7 @@ export default function DashboardPage() {
         {showQuickBacktest && (
           <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", marginTop: "0.75rem" }}>
             <div>
-              <label style={{ fontSize: "0.875rem", color: "#94a3b8" }}>选择策略</label>
+              <label style={{ fontSize: "0.875rem", color: "var(--muted)" }}>选择策略</label>
               <select value={qbStrategy} onChange={(e) => setQbStrategy(e.target.value)}>
                 <option value="">-- 请选择策略 --</option>
                 {strategies.map((s: any) => (
@@ -121,15 +121,15 @@ export default function DashboardPage() {
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "0.75rem" }}>
               <div>
-                <label style={{ fontSize: "0.875rem", color: "#94a3b8" }}>开始日期</label>
+                <label style={{ fontSize: "0.875rem", color: "var(--muted)" }}>开始日期</label>
                 <input type="date" value={qbStart} onChange={(e) => setQbStart(e.target.value)} />
               </div>
               <div>
-                <label style={{ fontSize: "0.875rem", color: "#94a3b8" }}>结束日期</label>
+                <label style={{ fontSize: "0.875rem", color: "var(--muted)" }}>结束日期</label>
                 <input type="date" value={qbEnd} onChange={(e) => setQbEnd(e.target.value)} />
               </div>
               <div>
-                <label style={{ fontSize: "0.875rem", color: "#94a3b8" }}>初始资金</label>
+                <label style={{ fontSize: "0.875rem", color: "var(--muted)" }}>初始资金</label>
                 <input type="number" value={qbCash} onChange={(e) => setQbCash(Number(e.target.value))} />
               </div>
             </div>
@@ -151,7 +151,7 @@ export default function DashboardPage() {
               <div className="card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <div>
                   <span style={{ fontWeight: 600 }}>{job.symbols?.join(", ") || "--"}</span>
-                  <span style={{ color: "#94a3b8", marginLeft: "1rem", fontSize: "0.875rem" }}>
+                  <span style={{ color: "var(--muted)", marginLeft: "1rem", fontSize: "0.875rem" }}>
                     {job.start_date} ~ {job.end_date}
                   </span>
                 </div>
@@ -181,7 +181,7 @@ export default function DashboardPage() {
             </Link>
           ))}
           {jobs.length === 0 && (
-            <div className="card" style={{ textAlign: "center", color: "#94a3b8" }}>
+            <div className="card" style={{ textAlign: "center", color: "var(--muted)" }}>
               暂无回测记录，点击上方「快速回测」或前往<Link to="/strategy-backtest">策略回测</Link>开始。
             </div>
           )}
