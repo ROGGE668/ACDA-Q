@@ -27,14 +27,19 @@ settings = get_settings()
 
 # Pricing: cents per month
 TIER_PRICING = {
-    "pro": 29900,         # ~299 RMB
-    "enterprise": 99900,  # ~999 RMB
+    "basic": 990,         # 9.9 RMB / 月  (基础版,30 次)
+    "pro":   1990,        # 19.9 RMB / 月 (PRO,80 次)
+    "max":   9900,        # 99 RMB / 月   (MAX,500 次)
 }
 
+# 配额含义: AI 与回测各 N 次
+# 免费版按"日"计(每天 3 次);付费版按"月"计(每月 N 次)
+# 字段名 ai_quota_daily / backtest_quota_daily 是历史遗留,数字含义视 tier 而定
 TIER_CONFIG = {
-    "free": {"max_devices": 1, "ai_quota_daily": 5, "backtest_quota_daily": 10},
-    "pro": {"max_devices": 3, "ai_quota_daily": 50, "backtest_quota_daily": 100},
-    "enterprise": {"max_devices": 10, "ai_quota_daily": 9999, "backtest_quota_daily": 9999},
+    "free":  {"max_devices": 1, "ai_quota_daily": 3,   "backtest_quota_daily": 3},
+    "basic": {"max_devices": 1, "ai_quota_daily": 30,  "backtest_quota_daily": 30},
+    "pro":   {"max_devices": 2, "ai_quota_daily": 80,  "backtest_quota_daily": 80},
+    "max":   {"max_devices": 5, "ai_quota_daily": 500, "backtest_quota_daily": 500},
 }
 
 

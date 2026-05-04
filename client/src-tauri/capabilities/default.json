@@ -15,9 +15,11 @@
       ]
     },
     "http:allow-fetch",
+    "store:default",
     "store:allow-get",
     "store:allow-set",
     "store:allow-save",
+    "store:allow-load",
     "store:allow-keys",
     "global-shortcut:allow-is-registered",
     "global-shortcut:allow-register",

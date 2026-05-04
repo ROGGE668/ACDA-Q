@@ -28,7 +28,7 @@ export default function SubscriptionPage() {
   const [sub, setSub] = useState<SubscriptionStatus | null>(null);
   const [devices, setDevices] = useState<Device[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selectedTier, setSelectedTier] = useState<"pro" | "enterprise">("pro");
+  const [selectedTier, setSelectedTier] = useState<"basic" | "pro" | "max">("pro");
   const [selectedDuration, setSelectedDuration] = useState(1);
   const [selectedChannel, setSelectedChannel] = useState<"alipay" | "wechat">("alipay");
   const [paying, setPaying] = useState(false);
@@ -85,9 +85,34 @@ export default function SubscriptionPage() {
 
   const tierNames: Record<string, string> = {
     free: "免费版",
-    pro: "专业版",
-    enterprise: "企业版",
+    basic: "基础版",
+    pro: "PRO",
+    max: "MAX",
   };
+
+  // 月单价(分,跟后端 TIER_PRICING 一致)
+  const TIER_PRICE_CENTS: Record<"basic" | "pro" | "max", number> = {
+    basic: 990,
+    pro: 1990,
+    max: 9900,
+  };
+
+  // 月单价对应的次数(每月,AI / 回测各一份)
+  const TIER_QUOTA: Record<"basic" | "pro" | "max", number> = {
+    basic: 30,
+    pro: 80,
+    max: 500,
+  };
+
+  const DURATIONS: { months: number; label: string }[] = [
+    { months: 1, label: "月" },
+    { months: 3, label: "季度" },
+    { months: 6, label: "半年" },
+    { months: 12, label: "年" },
+  ];
+
+  const totalCents = TIER_PRICE_CENTS[selectedTier] * selectedDuration;
+  const totalYuan = (totalCents / 100).toFixed(2).replace(/\.00$/, "");
 
   return (
     <div>
@@ -156,27 +181,54 @@ export default function SubscriptionPage() {
       <div className="card" style={{ marginTop: "1rem" }}>
         <h3>升级套餐</h3>
         <div style={{ marginTop: "0.75rem", display: "flex", flexDirection: "column", gap: "1rem" }}>
-          <div style={{ display: "flex", gap: "0.5rem" }}>
-            <button className={selectedTier === "pro" ? "" : "secondary"} onClick={() => setSelectedTier("pro")}>
-              专业版 (¥299/月)
-            </button>
-            <button className={selectedTier === "enterprise" ? "" : "secondary"} onClick={() => setSelectedTier("enterprise")}>
-              企业版 (¥999/月)
-            </button>
+
+          {/* 套餐档位 */}
+          <div>
+            <label style={{ fontSize: "0.875rem", color: "var(--muted)", display: "block", marginBottom: "0.5rem" }}>选择套餐</label>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "0.5rem" }}>
+              {(["basic", "pro", "max"] as const).map((t) => (
+                <button
+                  key={t}
+                  className={selectedTier === t ? "" : "secondary"}
+                  onClick={() => setSelectedTier(t)}
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    padding: "0.75rem 0.5rem",
+                    gap: "0.25rem",
+                  }}
+                >
+                  <span style={{ fontWeight: 600 }}>{tierNames[t]}</span>
+                  <span style={{ fontSize: "0.875rem" }}>¥{(TIER_PRICE_CENTS[t] / 100).toFixed(1).replace(/\.0$/, "")}/月</span>
+                  <span style={{ fontSize: "0.75rem", opacity: 0.8 }}>{TIER_QUOTA[t]} 次/月</span>
+                </button>
+              ))}
+            </div>
+            <p style={{ fontSize: "0.75rem", color: "var(--muted)", marginTop: "0.5rem" }}>
+              次数 = AI 生成 与 回测运行 各 N 次/月
+            </p>
           </div>
 
+          {/* 购买周期 */}
           <div>
-            <label style={{ fontSize: "0.875rem", color: "var(--muted)", display: "block", marginBottom: "0.25rem" }}>时长</label>
-            <select value={selectedDuration} onChange={(e) => setSelectedDuration(Number(e.target.value))}>
-              <option value={1}>1 个月</option>
-              <option value={3}>3 个月</option>
-              <option value={6}>6 个月</option>
-              <option value={12}>12 个月</option>
-            </select>
+            <label style={{ fontSize: "0.875rem", color: "var(--muted)", display: "block", marginBottom: "0.5rem" }}>购买周期</label>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "0.5rem" }}>
+              {DURATIONS.map((d) => (
+                <button
+                  key={d.months}
+                  className={selectedDuration === d.months ? "" : "secondary"}
+                  onClick={() => setSelectedDuration(d.months)}
+                >
+                  {d.label}
+                </button>
+              ))}
+            </div>
           </div>
 
+          {/* 支付方式 */}
           <div>
-            <label style={{ fontSize: "0.875rem", color: "var(--muted)", display: "block", marginBottom: "0.25rem" }}>支付方式</label>
+            <label style={{ fontSize: "0.875rem", color: "var(--muted)", display: "block", marginBottom: "0.5rem" }}>支付方式</label>
             <div style={{ display: "flex", gap: "0.5rem" }}>
               <button className={selectedChannel === "alipay" ? "" : "secondary"} onClick={() => setSelectedChannel("alipay")}>
                 支付宝
@@ -187,8 +239,12 @@ export default function SubscriptionPage() {
             </div>
           </div>
 
+          {/* 总价 */}
           <div style={{ fontSize: "1.125rem", fontWeight: 600 }}>
-            总计: ¥{((selectedTier === "pro" ? 29900 : 99900) * selectedDuration / 100).toFixed(0)}
+            总计: ¥{totalYuan}
+            <span style={{ fontSize: "0.75rem", color: "var(--muted)", marginLeft: "0.5rem", fontWeight: 400 }}>
+              ({tierNames[selectedTier]} × {selectedDuration} 个月)
+            </span>
           </div>
 
           <button onClick={createPayment} disabled={paying}>
