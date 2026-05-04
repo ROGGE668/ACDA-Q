@@ -1,8 +1,13 @@
 """
 子进程隔离运行器：在独立进程中执行策略回测，实现资源限制和网络隔离。
 兼容 Python 3.11.8
+
+注:用 billiard(Celery 内置的 multiprocessing fork)而不是标准库 multiprocessing,
+因为 Celery prefork worker 是 daemon 进程,标准 multiprocessing 不允许 daemon
+进程创建子进程,会抛 "daemonic processes are not allowed to have children"。
+billiard API 完全兼容 multiprocessing。
 """
-import multiprocessing as mp
+import billiard as mp
 import resource
 import socket
 from typing import Dict, Any
