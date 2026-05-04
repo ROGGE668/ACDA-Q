@@ -6,7 +6,14 @@
   "permissions": [
     "core:default",
     "shell:allow-open",
-    "http:default",
+    {
+      "identifier": "http:default",
+      "allow": [
+        { "url": "http://124.220.70.210:8000/**" },
+        { "url": "https://124.220.70.210:8000/**" },
+        { "url": "http://localhost:8000/**" }
+      ]
+    },
     "http:allow-fetch",
     "store:allow-get",
     "store:allow-set",
