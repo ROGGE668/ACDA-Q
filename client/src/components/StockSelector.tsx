@@ -36,7 +36,7 @@ export default function StockSelector({
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <label style={{ fontSize: "0.875rem", color: "#94a3b8" }}>
+        <label style={{ fontSize: "0.875rem", color: "var(--muted)" }}>
           {fullMarketScan
             ? "全市场扫描（按市值Top500）"
             : `选择标的（已选 ${selectedStocks.length} 只）`}
@@ -44,7 +44,7 @@ export default function StockSelector({
         <label
           style={{
             fontSize: "0.875rem",
-            color: "#94a3b8",
+            color: "var(--muted)",
             display: "flex",
             alignItems: "center",
             gap: "0.25rem",
@@ -87,7 +87,7 @@ export default function StockSelector({
                     alignItems: "center",
                     padding: "0.25rem 0",
                     cursor: "pointer",
-                    color: selectedStocks.includes(s.symbol) ? "#22c55e" : "inherit",
+                    color: selectedStocks.includes(s.symbol) ? "var(--success)" : "inherit",
                   }}
                   onClick={() => onToggleStock(s.symbol)}
                 >
@@ -111,13 +111,13 @@ export default function StockSelector({
                 alignItems: "center",
               }}
             >
-              <span style={{ color: "#94a3b8" }}>已选:</span>
+              <span style={{ color: "var(--muted)" }}>已选:</span>
               {selectedStocks.map((s) => (
                 <span
                   key={s}
                   style={{
-                    background: "#0f172a",
-                    border: "1px solid #334155",
+                    background: "var(--bg)",
+                    border: "1px solid var(--border)",
                     borderRadius: "0.25rem",
                     padding: "0.125rem 0.375rem",
                     display: "inline-flex",
