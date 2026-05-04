@@ -113,6 +113,12 @@ services:
     volumes:
       - ./:/app
     command: celery -A server.worker.celery_app worker --loglevel=info --concurrency=2
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A server.worker.celery_app inspect ping -d celery@$$(hostname) -t 5 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   scheduler:
     build:
@@ -136,6 +142,8 @@ services:
     volumes:
       - ./:/app
     command: python -m server.data.scheduler
+    healthcheck:
+      disable: true
 
   nginx:
     image: nginx:alpine
