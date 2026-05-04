@@ -163,7 +163,7 @@ export default function SettingsPage() {
       <div className="card" style={{ marginTop: "1rem", maxWidth: 600 }}>
         <h3>关于</h3>
         <div style={{ marginTop: "0.75rem", color: "var(--muted)", fontSize: "0.875rem" }}>
-          <p>ACDA-Quant v0.2.0</p>
+          <p>ACDA-Quant v{__APP_VERSION__}</p>
           <p style={{ marginTop: "0.5rem" }}>A股量化投资平台</p>
           <p style={{ marginTop: "0.5rem" }}>快捷键：</p>
           <ul style={{ marginLeft: "1.25rem", marginTop: "0.25rem" }}>
