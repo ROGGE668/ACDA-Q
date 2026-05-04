@@ -36,7 +36,7 @@ TIER_PRICING = {
 # 免费版按"日"计(每天 3 次);付费版按"月"计(每月 N 次)
 # 字段名 ai_quota_daily / backtest_quota_daily 是历史遗留,数字含义视 tier 而定
 TIER_CONFIG = {
-    "free":  {"max_devices": 1, "ai_quota_daily": 3,   "backtest_quota_daily": 3},
+    "free":  {"max_devices": 1, "ai_quota_daily": 3,   "backtest_quota_daily": 5},
     "basic": {"max_devices": 1, "ai_quota_daily": 30,  "backtest_quota_daily": 30},
     "pro":   {"max_devices": 2, "ai_quota_daily": 80,  "backtest_quota_daily": 80},
     "max":   {"max_devices": 5, "ai_quota_daily": 500, "backtest_quota_daily": 500},
