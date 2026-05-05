@@ -150,7 +150,7 @@ class PerformanceAnalyzer:
             total_commission = 0
 
         # 月度收益分布
-        monthly_returns = df["total_value"].resample("ME").last().pct_change().fillna(0)
+        monthly_returns = df["total_value"].resample("M").last().pct_change().fillna(0)
         monthly_return_list = [
             {"month": d.strftime("%Y-%m"), "return": round(r, 4)}
             for d, r in monthly_returns.items()
