@@ -1,12 +1,13 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { strategyAPI, backtestAPI } from "../services/api";
+import { backtestAPI } from "../services/api";
+import { useStrategyStore } from "../stores/strategyStore";
 import StockSelector from "../components/StockSelector";
 
 export default function StrategyBacktestPage() {
   const navigate = useNavigate();
+  const { strategies, loaded, fetchStrategies, getStrategy } = useStrategyStore();
 
-  const [strategies, setStrategies] = useState<any[]>([]);
   const [selectedStrategy, setSelectedStrategy] = useState("");
   const [startDate, setStartDate] = useState("2024-01-01");
   const [endDate, setEndDate] = useState("2024-06-01");
@@ -18,8 +19,10 @@ export default function StrategyBacktestPage() {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    strategyAPI.list().then((res) => setStrategies(res.data));
-  }, []);
+    if (!loaded) {
+      fetchStrategies();
+    }
+  }, [loaded, fetchStrategies]);
 
   const toggleStock = (symbol: string) => {
     setSelectedStocks((prev) =>
@@ -36,10 +39,16 @@ export default function StrategyBacktestPage() {
       alert("请至少选择一只股票，或开启全市场扫描");
       return;
     }
+    const strategy = getStrategy(selectedStrategy);
+    if (!strategy || !strategy.code) {
+      alert("策略代码为空，无法回测");
+      return;
+    }
     setSubmitting(true);
     try {
       const { data } = await backtestAPI.submit({
         strategy_id: selectedStrategy,
+        strategy_code: strategy.code,
         symbols: fullMarketScan ? [] : selectedStocks,
         start_date: startDate,
         end_date: endDate,
