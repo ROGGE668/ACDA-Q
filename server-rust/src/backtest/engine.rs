@@ -1,8 +1,7 @@
 //! 回测引擎 — 事件驱动主循环 + 绩效分析
 
 use chrono::{Datelike, NaiveDateTime};
-use rust_decimal::prelude::FromPrimitive;
-use rust_decimal::prelude::MathematicalOps;
+use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::collections::HashMap;
@@ -137,13 +136,17 @@ impl Engine {
 
             let variance: Decimal = returns
                 .iter()
-                .map(|r| (*r - mean).powu(2))
+                .map(|r| {
+                    let diff = *r - mean;
+                    diff * diff
+                })
                 .sum::<Decimal>()
                 / Decimal::from(returns.len() as u64);
             let std_dev = variance.sqrt().unwrap_or(dec!(0));
 
             let sharpe = if std_dev > dec!(0) {
-                excess * Decimal::from(252u64).sqrt().unwrap() / std_dev
+                let sqrt_252 = Decimal::from(252u64).sqrt().unwrap_or(dec!(0));
+                excess * sqrt_252 / std_dev
             } else {
                 dec!(0)
             };
@@ -153,7 +156,10 @@ impl Engine {
                 let d_mean = downside.iter().sum::<Decimal>() / Decimal::from(downside.len() as u64);
                 let d_var = downside
                     .iter()
-                    .map(|r| (*r - d_mean).powu(2))
+                    .map(|r| {
+                        let diff = *r - d_mean;
+                        diff * diff
+                    })
                     .sum::<Decimal>()
                     / Decimal::from(downside.len() as u64);
                 d_var.sqrt().unwrap_or(dec!(0))
@@ -162,7 +168,8 @@ impl Engine {
             };
 
             let sortino = if downside_std > dec!(0) {
-                excess * Decimal::from(252u64).sqrt().unwrap() / downside_std
+                let sqrt_252 = Decimal::from(252u64).sqrt().unwrap_or(dec!(0));
+                excess * sqrt_252 / downside_std
             } else {
                 dec!(0)
             };
@@ -194,7 +201,14 @@ impl Engine {
         let annual_return = if trading_days > 0 {
             let years = Decimal::from(trading_days) / Decimal::from(252u64);
             if years > dec!(0) {
-                (Decimal::ONE + total_return).powf(years.to_f64().unwrap_or(0.0)).unwrap_or(dec!(0)) - Decimal::ONE
+                let years_f = years.to_f64().unwrap_or(0.0);
+                let total_f = total_return.to_f64().unwrap_or(0.0);
+                if years_f > 0.0 {
+                    let annual_f = (1.0 + total_f).powf(1.0 / years_f) - 1.0;
+                    Decimal::from_f64(annual_f).unwrap_or(dec!(0))
+                } else {
+                    dec!(0)
+                }
             } else {
                 dec!(0)
             }

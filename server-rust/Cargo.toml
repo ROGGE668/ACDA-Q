@@ -11,7 +11,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 # 核心
-rust_decimal = { version = "1.33", features = ["serde"] }
+rust_decimal = { version = "1.33", features = ["serde", "maths"] }
 rust_decimal_macros = "1.33"
 chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }

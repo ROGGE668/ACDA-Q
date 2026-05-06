@@ -4,12 +4,13 @@
 
 pub mod backtest;
 
-#[cfg(feature = "pyo3-binding")]
-use pyo3::prelude::*;
-
-#[cfg(feature = "pyo3-binding")]
-#[pymodule]
-fn acda_q(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<backtest::PyBacktestEngine>()?;
-    Ok(())
-}
+// PyO3 绑定暂时注释，后续实现
+// #[cfg(feature = "pyo3-binding")]
+// use pyo3::prelude::*;
+//
+// #[cfg(feature = "pyo3-binding")]
+// #[pymodule]
+// fn acda_q(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
+//     m.add_class::<backtest::BacktestEngine>()?;
+//     Ok(())
+// }
