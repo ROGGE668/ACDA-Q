@@ -373,6 +373,8 @@ mod tests {
         let mut engine = Engine::new(dec!(1_000_000));
         let perf = engine.run(&mut BuyHold, &bars);
 
-        assert!(perf.total_trades >= 1);
+        println!("BuyHold 总交易次数: {}", perf.total_trades);
+        println!("BuyHold 最终资产: {}", perf.final_value);
+        assert!(perf.total_trades >= 1, "BuyHold 应至少买入一次，实际交易次数: {}", perf.total_trades);
     }
 }

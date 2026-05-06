@@ -90,7 +90,7 @@ impl<'a> Context<'a> {
 
         let raw_amount = (target_value / price).floor();
         let amount = (raw_amount / dec!(100)) * dec!(100); // 向下取整到 100 的倍数
-        let amount_u64: u64 = amount.to_u64().unwrap_or(0);
+        let amount_u64: u64 = amount.trunc().to_u64().unwrap_or(0);
 
         if amount_u64 > 0 {
             self.broker.execute(
@@ -110,7 +110,7 @@ impl<'a> Context<'a> {
         let qty = self.broker.position_qty(symbol);
         let raw_amount = (qty * percent).floor();
         let amount = (raw_amount / dec!(100)) * dec!(100);
-        let amount_u64: u64 = amount.to_u64().unwrap_or(0);
+        let amount_u64: u64 = amount.trunc().to_u64().unwrap_or(0);
 
         if amount_u64 > 0 {
             self.broker.execute(
