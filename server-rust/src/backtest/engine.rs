@@ -1,13 +1,15 @@
 //! 回测引擎 — 事件驱动主循环 + 绩效分析
 
-use chrono::NaiveDateTime;
+use chrono::{Datelike, NaiveDateTime};
+use rust_decimal::prelude::FromPrimitive;
+use rust_decimal::prelude::MathematicalOps;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::collections::HashMap;
 
 use super::broker::Broker;
 use super::context::Context;
-use super::types::{AccountSnapshot, Bar, Performance, Trade};
+use super::types::{Bar, Performance};
 
 /// 策略 Trait：用户实现 on_bar 方法
 pub trait Strategy {
@@ -135,7 +137,7 @@ impl Engine {
 
             let variance: Decimal = returns
                 .iter()
-                .map(|r| (*r - mean).powi(2))
+                .map(|r| (*r - mean).powu(2))
                 .sum::<Decimal>()
                 / Decimal::from(returns.len() as u64);
             let std_dev = variance.sqrt().unwrap_or(dec!(0));
@@ -151,7 +153,7 @@ impl Engine {
                 let d_mean = downside.iter().sum::<Decimal>() / Decimal::from(downside.len() as u64);
                 let d_var = downside
                     .iter()
-                    .map(|r| (*r - d_mean).powi(2))
+                    .map(|r| (*r - d_mean).powu(2))
                     .sum::<Decimal>()
                     / Decimal::from(downside.len() as u64);
                 d_var.sqrt().unwrap_or(dec!(0))
@@ -192,7 +194,7 @@ impl Engine {
         let annual_return = if trading_days > 0 {
             let years = Decimal::from(trading_days) / Decimal::from(252u64);
             if years > dec!(0) {
-                (Decimal::ONE + total_return).powd(years).unwrap_or(dec!(0)) - Decimal::ONE
+                (Decimal::ONE + total_return).powf(years.to_f64().unwrap_or(0.0)).unwrap_or(dec!(0)) - Decimal::ONE
             } else {
                 dec!(0)
             }
@@ -235,13 +237,13 @@ pub fn generate_mock_bars(symbol: &str, n_days: usize, seed: u64) -> Vec<Bar> {
             continue;
         }
 
-        let ret = Decimal::from_f64(rng.gen_range(-0.02..0.022)).unwrap();
+        let ret = Decimal::from_f64(rng.gen_range(-0.02..0.022)).unwrap_or(dec!(0));
         let new_price = price * (Decimal::ONE + ret);
-        let noise = Decimal::from_f64(rng.gen_range(0.005..0.02)).unwrap();
+        let noise = Decimal::from_f64(rng.gen_range(0.005..0.02)).unwrap_or(dec!(0));
 
         let high = new_price.max(price) * (Decimal::ONE + noise);
         let low = new_price.min(price) * (Decimal::ONE - noise);
-        let open = price * (Decimal::ONE + Decimal::from_f64(rng.gen_range(-0.01..0.01)).unwrap());
+        let open = price * (Decimal::ONE + Decimal::from_f64(rng.gen_range(-0.01..0.01)).unwrap_or(dec!(0)));
 
         bars.push(Bar {
             symbol: symbol.to_string(),
@@ -260,8 +262,6 @@ pub fn generate_mock_bars(symbol: &str, n_days: usize, seed: u64) -> Vec<Bar> {
 
     bars
 }
-
-use rand::{rngs::StdRng, SeedableRng};
 
 #[cfg(test)]
 mod tests {
@@ -346,7 +346,7 @@ mod tests {
         struct BuyHold;
         impl Strategy for BuyHold {
             fn on_bar(&mut self, ctx: &mut Context) {
-                if ctx.broker.positions.is_empty() {
+                if !ctx.broker.has_positions() {
                     for bar in ctx.bar_group {
                         ctx.buy(&bar.symbol, Decimal::ONE / Decimal::from(ctx.bar_group.len() as u64));
                     }

@@ -2,6 +2,7 @@
 //!
 //! 封装 history、sma、ema、buy、sell 等接口。
 
+use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::collections::HashMap;
@@ -106,7 +107,7 @@ impl<'a> Context<'a> {
 
     /// 卖出（按持仓百分比）
     pub fn sell(&mut self, symbol: &str, percent: Decimal) {
-        let qty = self.broker.positions.get(symbol).copied().unwrap_or(dec!(0));
+        let qty = self.broker.position_qty(symbol);
         let raw_amount = (qty * percent).floor();
         let amount = (raw_amount / dec!(100)) * dec!(100);
         let amount_u64: u64 = amount.to_u64().unwrap_or(0);

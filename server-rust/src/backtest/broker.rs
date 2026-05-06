@@ -95,6 +95,16 @@ impl Broker {
             .sum()
     }
 
+    /// 获取某标的持仓股数
+    pub fn position_qty(&self, symbol: &str) -> Decimal {
+        self.positions.get(symbol).copied().unwrap_or(dec!(0))
+    }
+
+    /// 是否持有任何仓位
+    pub fn has_positions(&self) -> bool {
+        !self.positions.is_empty()
+    }
+
     /// 执行订单
     pub fn execute(&mut self, orders: &[Order], bars: &[Bar]) {
         // 交易日切换检测
