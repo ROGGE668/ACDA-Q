@@ -39,6 +39,7 @@ pub struct Broker {
     cost_basis: HashMap<String, Decimal>,       // symbol -> 成本价
     today_bought: HashMap<String, Decimal>,     // symbol -> 当日净买入量
     last_trade_date: Option<chrono::NaiveDate>,
+    pending_orders: Vec<Order>,
 
     pub trades: Vec<Trade>,
     pub equity_curve: Vec<AccountSnapshot>,
@@ -66,6 +67,7 @@ impl Broker {
             cost_basis: HashMap::new(),
             today_bought: HashMap::new(),
             last_trade_date: None,
+            pending_orders: Vec::new(),
             trades: Vec::new(),
             equity_curve: Vec::new(),
             last_prices: HashMap::new(),
