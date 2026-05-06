@@ -93,15 +93,12 @@ impl<'a> Context<'a> {
         let amount_u64: u64 = amount.trunc().to_u64().unwrap_or(0);
 
         if amount_u64 > 0 {
-            self.broker.execute(
-                &[Order {
-                    symbol: symbol.to_string(),
-                    amount: amount_u64,
-                    order_type: OrderType::Buy,
-                    timestamp: self.timestamp,
-                }],
-                self.bar_group,
-            );
+            self.broker.submit_order(Order {
+                symbol: symbol.to_string(),
+                amount: amount_u64,
+                order_type: OrderType::Buy,
+                timestamp: self.timestamp,
+            });
         }
     }
 
@@ -113,15 +110,12 @@ impl<'a> Context<'a> {
         let amount_u64: u64 = amount.trunc().to_u64().unwrap_or(0);
 
         if amount_u64 > 0 {
-            self.broker.execute(
-                &[Order {
-                    symbol: symbol.to_string(),
-                    amount: amount_u64,
-                    order_type: OrderType::Sell,
-                    timestamp: self.timestamp,
-                }],
-                self.bar_group,
-            );
+            self.broker.submit_order(Order {
+                symbol: symbol.to_string(),
+                amount: amount_u64,
+                order_type: OrderType::Sell,
+                timestamp: self.timestamp,
+            });
         }
     }
 

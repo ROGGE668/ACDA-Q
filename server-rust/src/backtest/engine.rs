@@ -72,6 +72,9 @@ impl Engine {
             let mut ctx = Context::new(ts, &mut self.broker, &group_bars, bars);
             strategy.on_bar(&mut ctx);
 
+            // 执行待处理订单
+            self.broker.execute_pending_orders(&group_bars);
+
             // 记录净值
             self.broker.record_snapshot(ts);
         }

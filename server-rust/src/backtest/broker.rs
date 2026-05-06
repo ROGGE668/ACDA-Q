@@ -105,6 +105,17 @@ impl Broker {
         !self.positions.is_empty()
     }
 
+    /// 提交订单到待执行队列
+    pub fn submit_order(&mut self, order: Order) {
+        self.pending_orders.push(order);
+    }
+
+    /// 执行所有待处理订单
+    pub fn execute_pending_orders(&mut self, bars: &[Bar]) {
+        let orders: Vec<Order> = self.pending_orders.drain(..).collect();
+        self.execute(&orders, bars);
+    }
+
     /// 执行订单
     pub fn execute(&mut self, orders: &[Order], bars: &[Bar]) {
         // 交易日切换检测
