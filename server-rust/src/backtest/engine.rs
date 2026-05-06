@@ -2,6 +2,7 @@
 
 use chrono::{Datelike, NaiveDateTime};
 use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
+use rust_decimal::MathematicalOps;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::collections::HashMap;
