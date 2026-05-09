@@ -57,6 +57,14 @@ pub struct AccountSnapshot {
     pub position_value: Decimal,
 }
 
+/// 月度收益
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonthlyReturn {
+    pub month: String,
+    #[serde(rename = "return")]
+    pub return_pct: Decimal,
+}
+
 /// 绩效分析结果
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Performance {
@@ -65,10 +73,13 @@ pub struct Performance {
     pub max_drawdown: Decimal,
     pub sharpe_ratio: Decimal,
     pub sortino_ratio: Decimal,
+    pub calmar_ratio: Decimal,
     pub win_rate: Decimal,
+    pub profit_ratio: Decimal,
     pub total_trades: u64,
     pub total_commission: Decimal,
     pub final_value: Decimal,
     pub duration_days: u64,
     pub trading_days: u64,
+    pub monthly_returns: Vec<MonthlyReturn>,
 }

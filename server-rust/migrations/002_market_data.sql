@@ -1,4 +1,7 @@
--- TimescaleDB 行情数据表结构
+-- 002_market_data.sql — TimescaleDB 行情数据表
+
+-- 加载 TimescaleDB 扩展
+CREATE EXTENSION IF NOT EXISTS timescaledb;
 
 -- 股票基础信息表
 CREATE TABLE IF NOT EXISTS stock_basic (
@@ -7,8 +10,9 @@ CREATE TABLE IF NOT EXISTS stock_basic (
     exchange VARCHAR(10),
     industry VARCHAR(50),
     list_date DATE,
-    total_shares BIGINT,      -- 总股本（股）
-    float_shares BIGINT,      -- 流通股本（股）
+    total_shares BIGINT,
+    float_shares BIGINT,
+    is_st BOOLEAN DEFAULT FALSE,
     is_active BOOLEAN DEFAULT TRUE
 );
 
@@ -27,7 +31,6 @@ CREATE TABLE IF NOT EXISTS daily_bars (
     PRIMARY KEY (symbol, datetime)
 );
 
--- 转换为 hypertable（按时间自动分区）
 SELECT create_hypertable('daily_bars', 'datetime', if_not_exists => TRUE);
 
 -- 分钟K线数据 hypertable
@@ -53,7 +56,24 @@ CREATE TABLE IF NOT EXISTS adj_factors (
     PRIMARY KEY (symbol, trade_date)
 );
 
--- 索引
+-- 回测缓存表
+CREATE TABLE IF NOT EXISTS backtest_cache (
+    cache_hash VARCHAR(64) PRIMARY KEY,
+    strategy_id UUID REFERENCES strategies(id) ON DELETE CASCADE NOT NULL,
+    scope VARCHAR(20),
+    symbols TEXT[],
+    start_date DATE,
+    end_date DATE,
+    initial_cash DECIMAL(15, 2),
+    params JSONB,
+    result_summary JSONB,
+    result_report_path VARCHAR(255),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    expires_at TIMESTAMPTZ DEFAULT (NOW() + INTERVAL '7 days')
+);
+
+-- Indexes
 CREATE INDEX IF NOT EXISTS idx_daily_bars_symbol ON daily_bars(symbol, datetime DESC);
 CREATE INDEX IF NOT EXISTS idx_minute_bars_symbol ON minute_bars(symbol, datetime DESC);
 CREATE INDEX IF NOT EXISTS idx_stock_basic_industry ON stock_basic(industry);
+CREATE INDEX IF NOT EXISTS idx_backtest_cache_expires ON backtest_cache(expires_at);

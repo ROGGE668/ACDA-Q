@@ -1,0 +1,167 @@
+# ACDA-Q Rust-Only 部署
+#
+# 使用方式：
+#   docker-compose -f docker-compose.rust-only.yml up -d
+#
+# 包含：
+#   - PostgreSQL 16 (主数据库)
+#   - TimescaleDB (时序市场数据)
+#   - Redis 7 (任务队列 + 缓存)
+#   - ACDA-Q API (Rust Axum)
+#   - ACDA-Q Worker (Rust 后台任务处理器)
+#   - Nginx (反向代理)
+
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: acdaq_postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-quant}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-quant123}
+      POSTGRES_DB: ${POSTGRES_DB:-quant_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/migrations/postgres:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U quant -d quant_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    container_name: acdaq_timescaledb
+    environment:
+      POSTGRES_USER: ${TIMESCALE_USER:-quant}
+      POSTGRES_PASSWORD: ${TIMESCALE_PASSWORD:-quant123}
+      POSTGRES_DB: ${TIMESCALE_DB:-quant_market}
+    ports:
+      - "5433:5432"
+    volumes:
+      - timescale_data:/var/lib/postgresql/data
+      - ./database/migrations/timescale:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U quant -d quant_market"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: acdaq_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── Rust API Server ──────────────────────────────────────────────────────────
+  api:
+    build:
+      context: ./server-rust
+      dockerfile: Dockerfile
+    container_name: acdaq_api
+    ports:
+      - "8000:8000"
+    environment:
+      # Database
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-quant}:${POSTGRES_PASSWORD:-quant123}@postgres:5432/${POSTGRES_DB:-quant_db}
+      SYNC_DATABASE_URL: postgresql://${POSTGRES_USER:-quant}:${POSTGRES_PASSWORD:-quant123}@postgres:5432/${POSTGRES_DB:-quant_db}
+      TIMESCALE_DATABASE_URL: postgresql://${TIMESCALE_USER:-quant}:${TIMESCALE_PASSWORD:-quant123}@timescaledb:5432/${TIMESCALE_DB:-quant_market}
+      # Redis
+      REDIS_URL: redis://redis:6379/0
+      # Security
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set in production}
+      # AI
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
+      # Data
+      TUSHARE_TOKEN: ${TUSHARE_TOKEN:-}
+      # Backtest
+      BACKTEST_COMMISSION: ${BACKTEST_COMMISSION:-0.0003}
+      BACKTEST_SLIPPAGE: ${BACKTEST_SLIPPAGE:-0.001}
+      BACKTEST_STAMP_DUTY: ${BACKTEST_STAMP_DUTY:-0.0005}
+      BACKTEST_TRANSFER_FEE: ${BACKTEST_TRANSFER_FEE:-0.00001}
+      BACKTEST_RISK_FREE_RATE: ${BACKTEST_RISK_FREE_RATE:-0.02}
+      # CORS（生产环境应指定具体域名）
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      timescaledb:
+        condition: service_healthy
+    volumes:
+      - ./reports:/app/reports
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ── Rust Worker（处理回测任务）──────────────────────────────────────────────
+  # 注意：同时只运行一个 worker 实例；Redis Streams 自动负载均衡多消费者
+  worker:
+    build:
+      context: ./server-rust
+      dockerfile: Dockerfile
+    container_name: acdaq_worker
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-quant}:${POSTGRES_PASSWORD:-quant123}@postgres:5432/${POSTGRES_DB:-quant_db}
+      SYNC_DATABASE_URL: postgresql://${POSTGRES_USER:-quant}:${POSTGRES_PASSWORD:-quant123}@postgres:5432/${POSTGRES_DB:-quant_db}
+      TIMESCALE_DATABASE_URL: postgresql://${TIMESCALE_USER:-quant}:${TIMESCALE_PASSWORD:-quant123}@timescaledb:5432/${TIMESCALE_DB:-quant_market}
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set in production}
+      BACKTEST_COMMISSION: ${BACKTEST_COMMISSION:-0.0003}
+      BACKTEST_SLIPPAGE: ${BACKTEST_SLIPPAGE:-0.001}
+      BACKTEST_STAMP_DUTY: ${BACKTEST_STAMP_DUTY:-0.0005}
+      BACKTEST_TRANSFER_FEE: ${BACKTEST_TRANSFER_FEE:-0.00001}
+      TUSHARE_TOKEN: ${TUSHARE_TOKEN:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      timescaledb:
+        condition: service_healthy
+    volumes:
+      - ./reports:/app/reports
+    # Worker 模式：消费 Redis Streams 回测任务，不暴露端口
+    command: ["/app/acda-q-server", "--worker"]
+    restart: unless-stopped
+    healthcheck:
+      disable: true
+
+  # ── Nginx 反向代理 ───────────────────────────────────────────────────────────
+  nginx:
+    image: nginx:alpine
+    container_name: acdaq_nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.rust-only.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  postgres_data:
+  timescale_data:
+  redis_data:

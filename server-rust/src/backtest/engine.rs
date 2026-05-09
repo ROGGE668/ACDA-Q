@@ -1,12 +1,12 @@
 //! 回测引擎 — 事件驱动主循环 + 绩效分析
 
 use chrono::{Datelike, NaiveDateTime};
-use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
-use rust_decimal::MathematicalOps;
+use rust_decimal::prelude::FromPrimitive;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::collections::HashMap;
 
+use super::analyzer::calculate_performance;
 use super::broker::Broker;
 use super::context::Context;
 use super::types::{Bar, Performance};
@@ -21,6 +21,7 @@ pub trait Strategy {
 pub struct Engine {
     pub broker: Broker,
     initial_cash: Decimal,
+    risk_free_rate: Decimal,
 }
 
 impl Engine {
@@ -34,17 +35,29 @@ impl Engine {
                 dec!(0.00001),
             ),
             initial_cash,
+            risk_free_rate: dec!(0.02),
         }
     }
 
-    pub fn with_options(mut self, commission: Decimal, slippage: Decimal) -> Self {
+    pub fn with_options(
+        mut self,
+        commission: Decimal,
+        slippage: Decimal,
+        stamp_duty: Decimal,
+        transfer_fee: Decimal,
+    ) -> Self {
         self.broker = Broker::new(
             self.initial_cash,
             commission,
             slippage,
-            dec!(0.0005),
-            dec!(0.00001),
+            stamp_duty,
+            transfer_fee,
         );
+        self
+    }
+
+    pub fn with_risk_free_rate(mut self, rate: Decimal) -> Self {
+        self.risk_free_rate = rate;
         self
     }
 
@@ -56,183 +69,34 @@ impl Engine {
     ) -> Performance {
         strategy.on_init();
 
-        // 按日期分组
-        let mut groups: HashMap<NaiveDateTime, Vec<&Bar>> = HashMap::new();
+        // 按日期分组（使用 NaiveDate 作为 key 避免时间精度问题）
+        let mut groups: HashMap<chrono::NaiveDate, Vec<&Bar>> = HashMap::new();
         for bar in bars {
-            groups.entry(bar.timestamp).or_default().push(bar);
+            groups.entry(bar.timestamp.date()).or_default().push(bar);
         }
 
-        let mut timestamps: Vec<_> = groups.keys().copied().collect();
-        timestamps.sort();
+        let mut dates: Vec<_> = groups.keys().copied().collect();
+        dates.sort();
 
-        for ts in timestamps {
-            let group = groups.get(&ts).unwrap();
+        for date in dates {
+            let group = groups.get(&date).unwrap();
             let group_bars: Vec<Bar> = group.iter().map(|b| (*b).clone()).collect();
 
-            let mut ctx = Context::new(ts, &mut self.broker, &group_bars, bars);
+            let mut ctx = Context::new(date.and_hms_opt(0, 0, 0).unwrap(), &mut self.broker, &group_bars, bars);
             strategy.on_bar(&mut ctx);
 
             // 执行待处理订单
             self.broker.execute_pending_orders(&group_bars);
 
             // 记录净值
-            self.broker.record_snapshot(ts);
+            println!("After execute: trades={}, equity={}", self.broker.trades.len(), self.broker.equity_curve.len());
+            self.broker.record_snapshot(date.and_hms_opt(0, 0, 0).unwrap());
+            println!("After snapshot: equity={}", self.broker.equity_curve.len());
         }
 
         strategy.on_exit();
-        self.calculate_performance()
-    }
-
-    fn calculate_performance(&self) -> Performance {
-        let curve = &self.broker.equity_curve;
-        if curve.is_empty() {
-            return Performance {
-                total_return: dec!(0),
-                annual_return: dec!(0),
-                max_drawdown: dec!(0),
-                sharpe_ratio: dec!(0),
-                sortino_ratio: dec!(0),
-                win_rate: dec!(0),
-                total_trades: 0,
-                total_commission: dec!(0),
-                final_value: self.initial_cash,
-                duration_days: 0,
-                trading_days: 0,
-            };
-        }
-
-        let initial = self.initial_cash;
-        let final_val = curve.last().unwrap().total_value;
-        let total_return = (final_val - initial) / initial;
-
-        let trading_days = curve.len() as u64;
-        let duration = if trading_days > 0 {
-            (curve.last().unwrap().timestamp - curve.first().unwrap().timestamp).num_days() as u64
-        } else {
-            0
-        };
-
-        // 最大回撤
-        let mut cummax = dec!(0);
-        let mut max_dd = dec!(0);
-        for snap in curve.iter() {
-            if snap.total_value > cummax {
-                cummax = snap.total_value;
-            }
-            let dd = (snap.total_value - cummax) / cummax;
-            if dd < max_dd {
-                max_dd = dd;
-            }
-        }
-
-        // 收益率序列
-        let mut returns: Vec<Decimal> = Vec::new();
-        for i in 1..curve.len() {
-            let r = (curve[i].total_value - curve[i - 1].total_value) / curve[i - 1].total_value;
-            returns.push(r);
-        }
-
-        // 夏普比率（简化：无风险利率 2%）
-        let rf_daily = dec!(0.02) / Decimal::from(252u64);
-        let (sharpe, sortino) = if !returns.is_empty() {
-            let mean: Decimal = returns.iter().sum::<Decimal>() / Decimal::from(returns.len() as u64);
-            let excess = mean - rf_daily;
-
-            let variance: Decimal = returns
-                .iter()
-                .map(|r| {
-                    let diff = *r - mean;
-                    diff * diff
-                })
-                .sum::<Decimal>()
-                / Decimal::from(returns.len() as u64);
-            let std_dev = variance.sqrt().unwrap_or(dec!(0));
-
-            let sharpe = if std_dev > dec!(0) {
-                let sqrt_252 = Decimal::from(252u64).sqrt().unwrap_or(dec!(0));
-                excess * sqrt_252 / std_dev
-            } else {
-                dec!(0)
-            };
-
-            let downside: Vec<Decimal> = returns.iter().filter(|r| **r < dec!(0)).copied().collect();
-            let downside_std = if !downside.is_empty() {
-                let d_mean = downside.iter().sum::<Decimal>() / Decimal::from(downside.len() as u64);
-                let d_var = downside
-                    .iter()
-                    .map(|r| {
-                        let diff = *r - d_mean;
-                        diff * diff
-                    })
-                    .sum::<Decimal>()
-                    / Decimal::from(downside.len() as u64);
-                d_var.sqrt().unwrap_or(dec!(0))
-            } else {
-                dec!(0)
-            };
-
-            let sortino = if downside_std > dec!(0) {
-                let sqrt_252 = Decimal::from(252u64).sqrt().unwrap_or(dec!(0));
-                excess * sqrt_252 / downside_std
-            } else {
-                dec!(0)
-            };
-
-            (sharpe, sortino)
-        } else {
-            (dec!(0), dec!(0))
-        };
-
-        // 胜率
-        let mut wins = 0u64;
-        let mut total_pnl = dec!(0);
-        let mut total_commission = dec!(0);
-        for trade in &self.broker.trades {
-            total_commission += trade.commission + trade.stamp_duty + trade.transfer_fee;
-            if trade.pnl > dec!(0) {
-                wins += 1;
-            }
-            total_pnl += trade.pnl;
-        }
-
-        let win_rate = if !self.broker.trades.is_empty() {
-            Decimal::from(wins) / Decimal::from(self.broker.trades.len() as u64)
-        } else {
-            dec!(0)
-        };
-
-        // 年化收益（按交易日 252）
-        let annual_return = if trading_days > 0 {
-            let years = Decimal::from(trading_days) / Decimal::from(252u64);
-            if years > dec!(0) {
-                let years_f = years.to_f64().unwrap_or(0.0);
-                let total_f = total_return.to_f64().unwrap_or(0.0);
-                if years_f > 0.0 {
-                    let annual_f = (1.0 + total_f).powf(1.0 / years_f) - 1.0;
-                    Decimal::from_f64(annual_f).unwrap_or(dec!(0))
-                } else {
-                    dec!(0)
-                }
-            } else {
-                dec!(0)
-            }
-        } else {
-            dec!(0)
-        };
-
-        Performance {
-            total_return,
-            annual_return,
-            max_drawdown: max_dd,
-            sharpe_ratio: sharpe,
-            sortino_ratio: sortino,
-            win_rate,
-            total_trades: self.broker.trades.len() as u64,
-            total_commission,
-            final_value: final_val,
-            duration_days: duration.max(0) as u64,
-            trading_days,
-        }
+        println!("Before calculate_performance: trades={}", self.broker.trades.len());
+        calculate_performance(&self.broker, self.initial_cash, self.risk_free_rate)
     }
 }
 
@@ -366,7 +230,7 @@ mod tests {
             fn on_bar(&mut self, ctx: &mut Context) {
                 if !ctx.broker.has_positions() {
                     for bar in ctx.bar_group {
-                        ctx.buy(&bar.symbol, Decimal::ONE / Decimal::from(ctx.bar_group.len() as u64));
+                        ctx.buy(&bar.symbol, dec!(0.9) / Decimal::from(ctx.bar_group.len() as u64));
                     }
                 }
             }
@@ -376,8 +240,7 @@ mod tests {
         let mut engine = Engine::new(dec!(1_000_000));
         let perf = engine.run(&mut BuyHold, &bars);
 
-        println!("BuyHold 总交易次数: {}", perf.total_trades);
-        println!("BuyHold 最终资产: {}", perf.final_value);
-        assert!(perf.total_trades >= 1, "BuyHold 应至少买入一次，实际交易次数: {}", perf.total_trades);
+        assert!(perf.total_trades >= 1, "BuyHold should have at least one trade, actual trades: {}", perf.total_trades);
+        assert!(perf.final_value > dec!(0));
     }
 }

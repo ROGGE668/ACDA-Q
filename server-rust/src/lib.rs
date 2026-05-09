@@ -1,16 +1,20 @@
-//! ACDA-Q 回测引擎 — Rust 核心实现
+//! ACDA-Q 量化投资平台 — Rust 核心库
 //!
-//! 高性能、零开销抽象、编译期类型安全。
+//! 包含高性能回测引擎、数据模型、认证模块、任务队列、AI 生成。
+//! 可作为独立库使用，也可通过 PyO3 暴露给 Python。
 
+#![allow(dependency_on_unit_never_type_fallback)]
+
+pub mod ai;
+pub mod api;
+pub mod auth;
 pub mod backtest;
-
-// PyO3 绑定暂时注释，后续实现
-// #[cfg(feature = "pyo3-binding")]
-// use pyo3::prelude::*;
-//
-// #[cfg(feature = "pyo3-binding")]
-// #[pymodule]
-// fn acda_q(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
-//     m.add_class::<backtest::BacktestEngine>()?;
-//     Ok(())
-// }
+pub mod config;
+pub mod data;
+pub mod db;
+pub mod error;
+pub mod metrics;
+pub mod middleware;
+pub mod models;
+pub mod queue;
+pub mod websocket;

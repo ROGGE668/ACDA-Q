@@ -2,7 +2,7 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use acda_q::backtest::engine::{generate_mock_bars, Engine};
 use acda_q::backtest::context::Context;
 use acda_q::backtest::types::{Bar, Order, OrderType};
-use acda_q::backtest::Strategy;
+use acda_q::backtest::engine::Strategy;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 
@@ -71,7 +71,7 @@ fn bench_buy_hold(c: &mut Criterion) {
     struct BuyHold;
     impl Strategy for BuyHold {
         fn on_bar(&mut self, ctx: &mut Context) {
-            if ctx.broker.positions.is_empty() {
+            if !ctx.broker.has_positions() {
                 for bar in ctx.bar_group {
                     ctx.buy(&bar.symbol, Decimal::ONE / Decimal::from(ctx.bar_group.len() as u64));
                 }

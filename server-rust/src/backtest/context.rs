@@ -2,7 +2,8 @@
 //!
 //! 封装 history、sma、ema、buy、sell 等接口。
 
-use rust_decimal::prelude::ToPrimitive;
+use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
+use rust_decimal::MathematicalOps;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::collections::HashMap;
@@ -76,6 +77,105 @@ impl<'a> Context<'a> {
             ema = (*price - ema) * multiplier + ema;
         }
         ema
+    }
+
+    /// RSI (相对强弱指标)
+    pub fn rsi(&mut self, symbol: &str, period: usize) -> Decimal {
+        let hist = self.history(symbol, period + 1);
+        if hist.len() < period + 1 {
+            return dec!(0);
+        }
+
+        let mut gains = dec!(0);
+        let mut losses = dec!(0);
+        let start = hist.len() - period;
+
+        for i in (start + 1)..hist.len() {
+            let change = hist[i] - hist[i - 1];
+            if change > dec!(0) {
+                gains += change;
+            } else {
+                losses += change.abs();
+            }
+        }
+
+        let avg_gain = gains / Decimal::from(period as u64);
+        let avg_loss = losses / Decimal::from(period as u64);
+
+        if avg_loss == dec!(0) {
+            return dec!(100);
+        }
+
+        let rs = avg_gain / avg_loss;
+        dec!(100) - (dec!(100) / (Decimal::ONE + rs))
+    }
+
+    /// Bollinger Bands (布林带)
+    /// 返回 (上轨, 中轨, 下轨)
+    pub fn bollinger_bands(&mut self, symbol: &str, period: usize) -> (Decimal, Decimal, Decimal) {
+        let hist = self.history(symbol, period);
+        if hist.len() < period {
+            return (dec!(0), dec!(0), dec!(0));
+        }
+
+        let sum: Decimal = hist.iter().sum();
+        let middle = sum / Decimal::from(period as u64);
+
+        let variance_sum: Decimal = hist
+            .iter()
+            .map(|price| {
+                let diff = *price - middle;
+                diff * diff
+            })
+            .sum();
+
+        let variance = variance_sum / Decimal::from(period as u64);
+        let std_dev = variance.sqrt().unwrap_or(dec!(0));
+
+        let upper = middle + std_dev * dec!(2);
+        let lower = middle - std_dev * dec!(2);
+
+        (upper, middle, lower)
+    }
+
+    /// MACD (指数平滑异同平均线)
+    /// 返回 (macd_line, signal_line, histogram)
+    pub fn macd(&mut self, symbol: &str, fast: usize, slow: usize, signal: usize) -> (Decimal, Decimal, Decimal) {
+        let total = slow + signal;
+        let hist = self.history(symbol, total * 2);
+        if hist.len() < total {
+            return (dec!(0), dec!(0), dec!(0));
+        }
+
+        let fast_mul = dec!(2) / (Decimal::from(fast as u64) + Decimal::ONE);
+        let slow_mul = dec!(2) / (Decimal::from(slow as u64) + Decimal::ONE);
+        let signal_mul = dec!(2) / (Decimal::from(signal as u64) + Decimal::ONE);
+
+        // 计算 fast_ema 和 slow_ema 序列
+        let mut fast_ema = hist[0];
+        let mut slow_ema = hist[0];
+        let mut macd_values = Vec::new();
+
+        for price in hist.iter().skip(1) {
+            fast_ema = (*price - fast_ema) * fast_mul + fast_ema;
+            slow_ema = (*price - slow_ema) * slow_mul + slow_ema;
+            macd_values.push(fast_ema - slow_ema);
+        }
+
+        if macd_values.len() < signal {
+            return (dec!(0), dec!(0), dec!(0));
+        }
+
+        // 计算 signal_line (macd_values 的 EMA)
+        let mut signal_ema = macd_values[0];
+        for val in macd_values.iter().skip(1) {
+            signal_ema = (*val - signal_ema) * signal_mul + signal_ema;
+        }
+
+        let macd_line = *macd_values.last().unwrap_or(&dec!(0));
+        let histogram = macd_line - signal_ema;
+
+        (macd_line, signal_ema, histogram)
     }
 
     /// 买入（按金额百分比）

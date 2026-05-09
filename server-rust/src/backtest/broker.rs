@@ -54,7 +54,7 @@ impl Broker {
         stamp_duty_rate: Decimal,
         transfer_fee_rate: Decimal,
     ) -> Self {
-        Self {
+        let s = Self {
             initial_cash: cash,
             cash,
             commission_rate,
@@ -71,7 +71,9 @@ impl Broker {
             trades: Vec::new(),
             equity_curve: Vec::new(),
             last_prices: HashMap::new(),
-        }
+        };
+        println!("Broker::new positions_len={}", s.positions.len());
+        s
     }
 
     pub fn with_options(mut self, enable_t1: bool, enable_limit: bool) -> Self {
@@ -104,7 +106,9 @@ impl Broker {
 
     /// 是否持有任何仓位
     pub fn has_positions(&self) -> bool {
-        !self.positions.is_empty()
+        let result = !self.positions.is_empty();
+        println!("has_positions: len={}, result={}", self.positions.len(), result);
+        result
     }
 
     /// 提交订单到待执行队列
@@ -120,6 +124,7 @@ impl Broker {
 
     /// 执行订单
     pub fn execute(&mut self, orders: &[Order], bars: &[Bar]) {
+        println!("execute: orders={}, bars={}", orders.len(), bars.len());
         // 交易日切换检测
         if self.enable_t1 && !bars.is_empty() {
             let current_date = bars[0].timestamp.date();
@@ -131,9 +136,12 @@ impl Broker {
 
         // 建立 symbol -> bar 映射
         let bar_map: HashMap<&str, &Bar> = bars.iter().map(|b| (b.symbol.as_str(), b)).collect();
+        println!("bar_map keys: {:?}", bar_map.keys().collect::<Vec<_>>());
 
         for order in orders {
+            println!("Processing order: {} {:?} amount={}", order.symbol, order.order_type, order.amount);
             let Some(bar) = bar_map.get(order.symbol.as_str()) else {
+                println!("  Bar not found for {}", order.symbol);
                 continue;
             };
 
@@ -176,10 +184,13 @@ impl Broker {
             match order.order_type {
                 OrderType::Buy => {
                     let total_cost = cost + commission + transfer_fee;
+                    println!("  Buy: cash={}, total_cost={}", self.cash, total_cost);
                     if self.cash < total_cost {
+                        println!("  Buy: cash insufficient");
                         continue;
                     }
                     self.cash -= total_cost;
+                    println!("  Buy: cash after={}", self.cash);
 
                     let old_qty = self.positions.get(&order.symbol).copied().unwrap_or(dec!(0));
                     let old_cost = self.cost_basis.get(&order.symbol).copied().unwrap_or(dec!(0)) * old_qty;
@@ -190,6 +201,7 @@ impl Broker {
                         self.cost_basis.insert(order.symbol.clone(), dec!(0));
                     }
                     self.positions.insert(order.symbol.clone(), new_qty);
+                    println!("  Buy: positions inserted, trades before push={}", self.trades.len());
 
                     *self.today_bought.entry(order.symbol.clone()).or_insert(dec!(0)) += amount;
 
@@ -204,6 +216,7 @@ impl Broker {
                         transfer_fee,
                         pnl: dec!(0),
                     });
+                    println!("  Buy: trades after push={}", self.trades.len());
                 }
                 OrderType::Sell => {
                     let current_qty = self.positions.get(&order.symbol).copied().unwrap_or(dec!(0));
