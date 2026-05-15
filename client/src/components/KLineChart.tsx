@@ -36,7 +36,11 @@ interface KLineChartProps {
   data: KLineItem[];
   trades?: TradeMarker[];
   height?: number;
+  period?: string;
+  onPeriodChange?: (period: string) => void;
 }
+
+const PERIODS = ["1m", "5m", "15m", "30m", "1h", "1d", "1w"];
 
 function toTs(dt: string): number {
   const m = (dt || "").match(/(\d{4})-(\d{2})-(\d{2})/);
@@ -138,7 +142,7 @@ class TradeBackgroundPrimitive {
   }
 }
 
-export default function KLineChart({ data, trades = [], height = 400 }: KLineChartProps) {
+export default function KLineChart({ data, trades = [], height = 400, period = "1d", onPeriodChange }: KLineChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -345,5 +349,28 @@ export default function KLineChart({ data, trades = [], height = 400 }: KLineCha
   if (validData.length === 0) {
     return <div style={{ color: "#94a3b8", padding: "2rem", textAlign: "center" }}>暂无 K 线数据</div>;
   }
-  return <div ref={chartContainerRef} style={{ width: "100%" }} />;
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "0.5rem", gap: "0.25rem" }}>
+        {PERIODS.map((p) => (
+          <button
+            key={p}
+            onClick={() => onPeriodChange?.(p)}
+            style={{
+              padding: "0.25rem 0.5rem",
+              fontSize: "0.75rem",
+              background: period === p ? "var(--primary)" : "var(--bg)",
+              color: period === p ? "#fff" : "var(--muted)",
+              border: "1px solid var(--border)",
+              borderRadius: "0.25rem",
+              cursor: "pointer",
+            }}
+          >
+            {p}
+          </button>
+        ))}
+      </div>
+      <div ref={chartContainerRef} style={{ width: "100%" }} />
+    </div>
+  );
 }

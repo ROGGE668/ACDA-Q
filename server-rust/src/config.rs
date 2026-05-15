@@ -6,7 +6,9 @@ use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Settings {
+    #[allow(dead_code)]
     pub app_name: String,
+    #[allow(dead_code)]
     pub debug: bool,
     pub host: String,
     pub port: u16,
@@ -26,6 +28,7 @@ pub struct Settings {
 
     // CORS
     pub cors_origins: String,
+    #[allow(dead_code)]
     pub cookie_secure: bool,
 
     // AI
@@ -38,11 +41,15 @@ pub struct Settings {
     pub backtest_slippage: Decimal,
     pub backtest_stamp_duty: Decimal,
     pub backtest_transfer_fee: Decimal,
+    #[allow(dead_code)]
     pub backtest_risk_free_rate: Decimal,
 
     // MinIO
+    #[allow(dead_code)]
     pub minio_endpoint: String,
+    #[allow(dead_code)]
     pub minio_access_key: String,
+    #[allow(dead_code)]
     pub minio_secret_key: String,
 
     // Data source

@@ -27,6 +27,7 @@ pub struct ProgressMessage {
 
 /// WebSocket 连接管理器（内存内广播，用于同进程多消费者）
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct WsManager {
     pub tx: broadcast::Sender<ProgressMessage>,
 }
@@ -38,6 +39,7 @@ impl WsManager {
     }
 
     /// 发布进度到内存广播（供同进程内的其他消费者使用）
+    #[allow(dead_code)]
     pub fn publish(&self, msg: ProgressMessage) {
         let _ = self.tx.send(msg);
     }

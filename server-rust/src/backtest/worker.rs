@@ -1,7 +1,7 @@
 //! 回测任务处理器 — Worker 核心逻辑
 //!
 //! 消费 Redis Streams 任务，执行内置策略回测，保存结果。
-//! Phase 1 支持内置策略（BuyAndHold / DualMA），自定义策略待 Phase 2。
+//! Phase 1 支持内置策略（BuyAndHold / DualMA），自定义策略通过沙箱执行。
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -11,7 +11,7 @@ use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use serde_json::json;
 use sqlx::PgPool;
-use tracing::{info, warn};
+use tracing::{info, warn, error};
 use crate::backtest::context::Context;
 use crate::backtest::datafeed;
 use crate::backtest::engine::{Engine, Strategy};
@@ -20,6 +20,7 @@ use crate::backtest::types::{Bar, Performance};
 use crate::config::Settings;
 use crate::models::BacktestJob;
 use crate::queue::{BacktestPayload, Queue, Task, TaskStatus, Worker};
+use crate::sandbox::{run_backtest_sandbox, SandboxConfig};
 use sha2::{Digest, Sha256};
 
 /// 报告文件根目录
@@ -184,6 +185,23 @@ impl BacktestWorker {
     }
 }
 
+/// 检查是否为内置策略类型
+fn is_builtin_strategy(strategy_type: &str) -> bool {
+    matches!(strategy_type, "buy_and_hold" | "dual_ma")
+}
+
+/// 从 payload 解析策略参数
+fn parse_strategy_params(params: &serde_json::Value) -> (String, serde_json::Value) {
+    let strategy_type = params
+        .get("strategy_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("buy_and_hold")
+        .to_string();
+    
+    let strategy_params = params.clone();
+    (strategy_type, strategy_params)
+}
+
 #[async_trait]
 impl Worker<BacktestPayload> for BacktestWorker {
     async fn process(&self, task: &Task<BacktestPayload>) -> Result<(), String> {
@@ -208,11 +226,7 @@ impl Worker<BacktestPayload> for BacktestWorker {
             .parse::<Decimal>()
             .map_err(|e| format!("Invalid initial_cash: {}", e))?;
 
-        let strategy_type = payload
-            .params
-            .get("strategy_type")
-            .and_then(|v| v.as_str())
-            .unwrap_or("buy_and_hold");
+        let (strategy_type, strategy_params) = parse_strategy_params(&payload.params);
 
         let symbols = payload.symbols.clone();
         if symbols.is_empty() {
@@ -241,7 +255,7 @@ impl Worker<BacktestPayload> for BacktestWorker {
                 generate_mock_bars_for_symbols(&symbols)
             }
         };
-        all_bars.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+        all_bars.sort_by_key(|x| x.timestamp);
 
         if all_bars.is_empty() {
             return Err("No bars loaded".to_string());
@@ -252,21 +266,9 @@ impl Worker<BacktestPayload> for BacktestWorker {
             .await
             .ok();
 
-        // 4. 创建 Engine（使用 Settings 中的费率）
-        let mut engine = Engine::new(initial_cash).with_options(
-            self.settings.backtest_commission,
-            self.settings.backtest_slippage,
-            self.settings.backtest_stamp_duty,
-            self.settings.backtest_transfer_fee,
-        );
-
-        self.queue
-            .publish_progress(&job_id_str, 0.5, "开始回测计算", "running")
-            .await
-            .ok();
-
-        // 5. 执行回测或扫描
+        // 4. 判断执行路径：内置策略 vs 自定义策略（沙箱）
         let (perf, scan_results) = if payload.scope == "scan" {
+            // Scan 模式：全市场扫描
             let top_n = payload
                 .params
                 .get("top_n")
@@ -322,33 +324,27 @@ impl Worker<BacktestPayload> for BacktestWorker {
             };
 
             (perf, Some(results))
+        } else if is_builtin_strategy(&strategy_type) {
+            // 内置策略：在当前进程执行（Rust 原生）
+            let perf = self.run_builtin_strategy(
+                &strategy_type,
+                &strategy_params,
+                &all_bars,
+                initial_cash,
+            )?;
+            (perf, None)
         } else {
-            let perf = match strategy_type {
-                "buy_and_hold" => {
-                    let mut strategy = BuyAndHold::new();
-                    engine.run(&mut strategy, &all_bars)
-                }
-                "dual_ma" => {
-                    let short = payload
-                        .params
-                        .get("short_window")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(5) as usize;
-                    let long = payload
-                        .params
-                        .get("long_window")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(20) as usize;
-                    let mut strategy = DualMA::new(short, long);
-                    engine.run(&mut strategy, &all_bars)
-                }
-                _ => {
-                    return Err(format!(
-                        "Unsupported strategy type: {}. Supported: buy_and_hold, dual_ma",
-                        strategy_type
-                    ));
-                }
-            };
+            // 自定义策略：通过沙箱执行 Python 代码
+            let perf = self.run_sandbox_strategy(
+                &payload.code,
+                &symbols,
+                &payload.start_date,
+                &payload.end_date,
+                initial_cash,
+                &strategy_params,
+                &job_id_str,
+            )
+            .await?;
             (perf, None)
         };
 
@@ -357,7 +353,7 @@ impl Worker<BacktestPayload> for BacktestWorker {
             .await
             .ok();
 
-        // 6. 保存报告
+        // 5. 保存报告
         let report_path = if let Some(results) = scan_results {
             let report = json!({
                 "scope": "scan",
@@ -373,7 +369,7 @@ impl Worker<BacktestPayload> for BacktestWorker {
 
         info!("Report saved: {}", report_path);
 
-        // 7. 更新数据库
+        // 6. 更新数据库
         let summary = json!({
             "total_return": perf.total_return.to_string(),
             "annual_return": perf.annual_return.to_string(),
@@ -393,7 +389,7 @@ impl Worker<BacktestPayload> for BacktestWorker {
         .await
         .map_err(|e| format!("Failed to update job: {}", e))?;
 
-        // 8. 写入结果缓存（仅限有 strategy_id 的任务）
+        // 7. 写入结果缓存（仅限有 strategy_id 的任务）
         if let Ok(Some(job)) = sqlx::query_as::<_, BacktestJob>(
             "SELECT * FROM backtest_jobs WHERE id = $1"
         )
@@ -402,16 +398,17 @@ impl Worker<BacktestPayload> for BacktestWorker {
         .await
         {
             if let Some(strategy_id) = job.strategy_id {
-                let cache_hash = make_cache_hash(
-                    &strategy_id,
-                    &payload.code,
-                    &symbols,
-                    &payload.start_date,
-                    &payload.end_date,
-                    &initial_cash,
-                    &payload.params,
-                    &payload.scope,
-                );
+                let cache_key = CacheKey {
+                    strategy_id: &strategy_id,
+                    code: &payload.code,
+                    symbols: &symbols,
+                    start_date: &payload.start_date,
+                    end_date: &payload.end_date,
+                    initial_cash: &initial_cash,
+                    params: &payload.params,
+                    scope: &payload.scope,
+                };
+                let cache_hash = make_cache_hash(&cache_key);
 
                 sqlx::query(
                     "INSERT INTO backtest_cache (cache_hash, strategy_id, scope, symbols, start_date, end_date, initial_cash, params, result_summary, result_report_path)
@@ -449,27 +446,237 @@ impl Worker<BacktestPayload> for BacktestWorker {
     }
 }
 
+impl BacktestWorker {
+    /// 执行内置策略（在当前进程）
+    fn run_builtin_strategy(
+        &self,
+        strategy_type: &str,
+        params: &serde_json::Value,
+        bars: &[Bar],
+        initial_cash: Decimal,
+    ) -> Result<Performance, String> {
+        let mut engine = Engine::new(initial_cash).with_options(
+            self.settings.backtest_commission,
+            self.settings.backtest_slippage,
+            self.settings.backtest_stamp_duty,
+            self.settings.backtest_transfer_fee,
+        );
+
+        match strategy_type {
+            "buy_and_hold" => {
+                let mut strategy = BuyAndHold::new();
+                Ok(engine.run(&mut strategy, bars))
+            }
+            "dual_ma" => {
+                let short = params
+                    .get("short_window")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(5) as usize;
+                let long = params
+                    .get("long_window")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(20) as usize;
+                let mut strategy = DualMA::new(short, long);
+                Ok(engine.run(&mut strategy, bars))
+            }
+            _ => Err(format!(
+                "Unsupported builtin strategy: {}. Supported: buy_and_hold, dual_ma",
+                strategy_type
+            )),
+        }
+    }
+
+    /// 通过沙箱执行自定义策略（独立子进程）
+    async fn run_sandbox_strategy(
+        &self,
+        code: &str,
+        symbols: &[String],
+        start_date: &str,
+        end_date: &str,
+        initial_cash: Decimal,
+        params: &serde_json::Value,
+        job_id: &str,
+    ) -> Result<Performance, String> {
+        info!("Running custom strategy in sandbox for job: {}", job_id);
+
+        // 构建沙箱配置
+        let sandbox_config = SandboxConfig {
+            timeout_secs: 300,
+            memory_limit_bytes: 512 * 1024 * 1024, // 512MB
+            cpu_limit_secs: 60,
+        };
+
+        // 通过沙箱执行策略
+        let result = run_backtest_sandbox(
+            code,
+            symbols,
+            start_date,
+            end_date,
+            initial_cash.to_string().parse().unwrap_or(100000.0),
+            &sandbox_config,
+        ).map_err(|e| {
+            error!("Sandbox execution failed: {}", e);
+            format!("Sandbox execution failed: {}", e)
+        })?;
+
+        // 解析沙箱返回结果
+        match result.status.as_str() {
+            "success" => {
+                let result_data = result.result.ok_or("No result data from sandbox")?;
+                self.parse_sandbox_result(&result_data)
+            }
+            "security_error" => {
+                Err(format!("Security error: {}", result.error.unwrap_or_else(|| "Unknown error".to_string())))
+            }
+            _ => {
+                Err(format!(
+                    "Strategy execution failed: {}",
+                    result.error.unwrap_or_else(|| "Unknown error".to_string())
+                ))
+            }
+        }
+    }
+
+    /// 解析沙箱返回的 JSON 结果转换为 Performance
+    fn parse_sandbox_result(&self, data: &serde_json::Value) -> Result<Performance, String> {
+        // 从 JSON 解析性能指标
+        let total_return = data
+            .get("total_return")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<f64>().ok())
+            .map(Decimal::from_f64_retain)
+            .flatten()
+            .unwrap_or(dec!(0));
+
+        let annual_return = data
+            .get("annual_return")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<f64>().ok())
+            .map(Decimal::from_f64_retain)
+            .flatten()
+            .unwrap_or(dec!(0));
+
+        let max_drawdown = data
+            .get("max_drawdown")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<f64>().ok())
+            .map(Decimal::from_f64_retain)
+            .flatten()
+            .unwrap_or(dec!(0));
+
+        let sharpe_ratio = data
+            .get("sharpe_ratio")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<f64>().ok())
+            .map(Decimal::from_f64_retain)
+            .flatten()
+            .unwrap_or(dec!(0));
+
+        let sortino_ratio = data
+            .get("sortino_ratio")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<f64>().ok())
+            .map(Decimal::from_f64_retain)
+            .flatten()
+            .unwrap_or(dec!(0));
+
+        let calmar_ratio = data
+            .get("calmar_ratio")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<f64>().ok())
+            .map(Decimal::from_f64_retain)
+            .flatten()
+            .unwrap_or(dec!(0));
+
+        let win_rate = data
+            .get("win_rate")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<f64>().ok())
+            .map(Decimal::from_f64_retain)
+            .flatten()
+            .unwrap_or(dec!(0));
+
+        let profit_ratio = data
+            .get("profit_ratio")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<f64>().ok())
+            .map(Decimal::from_f64_retain)
+            .flatten()
+            .unwrap_or(dec!(0));
+
+        let total_trades = data
+            .get("total_trades")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+
+        let total_commission = data
+            .get("total_commission")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<f64>().ok())
+            .map(Decimal::from_f64_retain)
+            .flatten()
+            .unwrap_or(dec!(0));
+
+        let final_value = data
+            .get("final_value")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<f64>().ok())
+            .map(Decimal::from_f64_retain)
+            .flatten()
+            .unwrap_or(dec!(0));
+
+        let duration_days = data
+            .get("duration_days")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+
+        let trading_days = data
+            .get("trading_days")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+
+        Ok(Performance {
+            total_return,
+            annual_return,
+            max_drawdown,
+            sharpe_ratio,
+            sortino_ratio,
+            calmar_ratio,
+            win_rate,
+            profit_ratio,
+            total_trades,
+            total_commission,
+            final_value,
+            duration_days,
+            trading_days,
+            monthly_returns: Vec::new(),
+        })
+    }
+}
+
 /// 生成缓存哈希键
-fn make_cache_hash(
-    strategy_id: &uuid::Uuid,
-    code: &str,
-    symbols: &[String],
-    start_date: &str,
-    end_date: &str,
-    initial_cash: &Decimal,
-    params: &serde_json::Value,
-    scope: &str,
-) -> String {
+struct CacheKey<'a> {
+    strategy_id: &'a uuid::Uuid,
+    code: &'a str,
+    symbols: &'a [String],
+    start_date: &'a str,
+    end_date: &'a str,
+    initial_cash: &'a Decimal,
+    params: &'a serde_json::Value,
+    scope: &'a str,
+}
+
+fn make_cache_hash(key: &CacheKey) -> String {
     let input = format!(
         "{}:{}:{}:{}:{}:{}:{}:{}",
-        strategy_id,
-        code,
-        symbols.join(","),
-        start_date,
-        end_date,
-        initial_cash,
-        params.to_string(),
-        scope
+        key.strategy_id,
+        key.code,
+        key.symbols.join(","),
+        key.start_date,
+        key.end_date,
+        key.initial_cash,
+        key.params.to_string(),
+        key.scope
     );
     let hash = Sha256::digest(input.as_bytes());
     hex::encode(hash)

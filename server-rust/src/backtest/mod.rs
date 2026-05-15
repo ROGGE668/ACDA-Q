@@ -7,5 +7,3 @@ pub mod scanner;
 pub mod types;
 pub mod validator;
 pub mod worker;
-
-pub use engine::Engine as BacktestEngine;

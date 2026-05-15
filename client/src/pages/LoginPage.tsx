@@ -29,7 +29,8 @@ export default function LoginPage() {
     } catch (err: any) {
       console.error("Login/Register error:", err);
       const detail = err?.response?.data?.detail || err?.message || "请求失败";
-      setError(detail);
+      const truncated = detail.length > 200 ? detail.slice(0, 200) + "..." : detail;
+      setError(truncated);
     }
   };
 

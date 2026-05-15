@@ -393,7 +393,10 @@ fn parse_date(s: &str) -> anyhow::Result<NaiveDate> {
 
 fn parse_datetime(s: &str) -> anyhow::Result<DateTime<Utc>> {
     let date = parse_date(s)?;
-    Ok(date.and_hms_opt(0, 0, 0).unwrap().and_local_timezone(Utc).unwrap())
+    let naive_dt = date.and_hms_opt(0, 0, 0)
+        .ok_or_else(|| anyhow::anyhow!("Invalid time at {}", s))?;
+    Ok(naive_dt.and_local_timezone(Utc).single()
+        .ok_or_else(|| anyhow::anyhow!("Invalid timezone at {}", s))?)
 }
 
 // ========== 行解析 trait ==========
@@ -430,7 +433,8 @@ impl RowExt for Vec<serde_json::Value> {
         if let Some(s) = val.as_str() {
             s.parse().map_err(|e| anyhow::anyhow!("Bad decimal at {}: {}", idx, e))
         } else if let Some(f) = val.as_f64() {
-            Ok(Decimal::from_f64_retain(f).unwrap_or_default())
+            Decimal::from_f64_retain(f)
+                .ok_or_else(|| anyhow::anyhow!("Invalid decimal float at {}", idx))
         } else {
             Err(anyhow::anyhow!("Not a number at {}", idx))
         }

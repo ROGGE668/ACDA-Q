@@ -14,6 +14,16 @@ interface ParamDef {
   type: string;
 }
 
+interface BacktestParams {
+  strategy_code: string;
+  symbols: string[];
+  start_date: string;
+  end_date: string;
+  initial_cash: number;
+  scope?: "single" | "portfolio" | "scan";
+  params?: Record<string, any>;
+}
+
 export default function StrategyEditorPage() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -55,6 +65,7 @@ export default function StrategyEditorPage() {
 
   const [selectedStocks, setSelectedStocks] = useState<string[]>([]);
   const [fullMarketScan, setFullMarketScan] = useState(false);
+  const [exchange, setExchange] = useState("cn");
 
   useEffect(() => {
     if (id) {
@@ -67,15 +78,16 @@ export default function StrategyEditorPage() {
     }
   }, [id, getStrategy]);
 
-  // 代码变更后防抖提取参数（500ms）
-  useEffect(() => {
+  // 代码变更后防抖提取参数（500ms），使用 AbortController 取消旧任务
+useEffect(() => {
     if (!code.trim()) {
       setParams([]);
       return;
     }
+    const controller = new AbortController();
     const timer = setTimeout(() => {
       // 本地正则提取参数
-      extractParamsFromCode(code)
+      extractParamsFromCode(code, controller.signal)
         .then((res) => {
           if (res.params.length > 0) {
             setParams(res.params);
@@ -85,7 +97,10 @@ export default function StrategyEditorPage() {
         })
         .catch(() => extractParamsLocal());
     }, 500);
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
   }, [code]);
 
   const extractParamsLocal = () => {
@@ -192,7 +207,7 @@ export default function StrategyEditorPage() {
     }
     setBacktesting(true);
     try {
-      const backtestParams: any = {
+      const backtestParams: BacktestParams = {
         strategy_code: code,
         symbols: fullMarketScan ? [] : selectedStocks,
         start_date: startDate,
@@ -345,6 +360,8 @@ export default function StrategyEditorPage() {
                 onToggleStock={toggleStock}
                 fullMarketScan={fullMarketScan}
                 onFullMarketScanChange={setFullMarketScan}
+                exchange={exchange}
+                onExchangeChange={setExchange}
               />
 
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "0.75rem" }}>

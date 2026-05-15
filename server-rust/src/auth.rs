@@ -1,6 +1,7 @@
 //! JWT 认证与密码哈希
 
 use chrono::{Duration, Utc};
+use tracing::warn;
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -19,6 +20,7 @@ pub struct Claims {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct TokenPair {
     pub access_token: String,
     pub refresh_token: String,
@@ -31,8 +33,12 @@ pub fn hash_password(password: &str) -> Result<String, AppError> {
 }
 
 /// 验证密码
-pub fn verify_password(password: &str, hash: &str) -> bool {
-    bcrypt::verify(password, hash).unwrap_or(false)
+pub fn verify_password(password: &str, hash: &str) -> Result<bool, AppError> {
+    bcrypt::verify(password, hash)
+        .map_err(|e| {
+            warn!("Password verification error: {}", e);
+            AppError::Internal("Password verification failed".to_string())
+        })
 }
 
 /// 创建 Access Token
@@ -99,6 +105,7 @@ pub fn decode_token(token: &str, settings: &Settings) -> Result<Claims, AppError
 }
 
 /// 从请求头中提取 Bearer Token
+#[allow(dead_code)]
 pub fn extract_bearer_token(auth_header: &str) -> Option<&str> {
     auth_header.strip_prefix("Bearer ")
 }
@@ -142,8 +149,8 @@ mod tests {
     fn test_password_hash_and_verify() {
         let password = "TestPassword123";
         let hash = hash_password(password).unwrap();
-        assert!(verify_password(password, &hash));
-        assert!(!verify_password("wrong", &hash));
+        assert!(verify_password(password, &hash).unwrap());
+        assert!(!verify_password("wrong", &hash).unwrap());
     }
 
     #[test]

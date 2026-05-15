@@ -54,25 +54,23 @@ export default function SettingsPage() {
         <h3>通用</h3>
         <div style={{ display: "flex", flexDirection: "column", gap: "1rem", marginTop: "1rem" }}>
 
-          {import.meta.env.DEV && (
-            <div>
+          <div>
               <label style={{ fontSize: "0.875rem", color: "var(--muted)", display: "block", marginBottom: "0.25rem" }}>
-                API 服务器地址 <span style={{ color: "var(--warning, #f59e0b)", fontSize: "0.75rem" }}>(开发模式)</span>
+                API 服务器地址
               </label>
               <div style={{ display: "flex", gap: "0.5rem" }}>
                 <input
                   value={localApiBase}
                   onChange={(e) => setLocalApiBase(e.target.value)}
-                  placeholder="http://localhost:8000/api/v1"
+                  placeholder="https://api.example.com/api/v1"
                 />
                 <button onClick={saveApiBase}>保存</button>
               </div>
               {saved && <span style={{ color: "var(--success)", fontSize: "0.75rem" }}>已保存</span>}
               <p style={{ fontSize: "0.75rem", color: "var(--muted)", marginTop: "0.25rem" }}>
-                修改后需刷新应用生效
+                {localApiBase && !localApiBase.startsWith("http") ? "地址必须以 http:// 或 https:// 开头" : "修改后需刷新应用生效"}
               </p>
             </div>
-          )}
 
           <div>
             <label style={{ fontSize: "0.875rem", color: "var(--muted)", display: "block", marginBottom: "0.25rem" }}>

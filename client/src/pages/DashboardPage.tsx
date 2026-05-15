@@ -19,6 +19,7 @@ export default function DashboardPage() {
   const [qbCash, setQbCash] = useState(1_000_000);
   const [qbFullMarket, setQbFullMarket] = useState(false);
   const [qbSelectedStocks, setQbSelectedStocks] = useState<string[]>([]);
+  const [qbExchange, setQbExchange] = useState("cn");
   const [qbSubmitting, setQbSubmitting] = useState(false);
 
   useEffect(() => {
@@ -117,6 +118,8 @@ export default function DashboardPage() {
               onToggleStock={toggleQuickStock}
               fullMarketScan={qbFullMarket}
               onFullMarketScanChange={setQbFullMarket}
+              exchange={qbExchange}
+              onExchangeChange={setQbExchange}
             />
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "0.75rem" }}>

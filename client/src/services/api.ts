@@ -52,8 +52,9 @@ async function getDeviceFingerprint(): Promise<string | null> {
     cachedFingerprint = fp;
     return fp;
   } catch (e) {
-    // 降级：非 Tauri 环境使用浏览器指纹
-    debug("Tauri fingerprint unavailable, using fallback:", e);
+    // 降级方案：非 Tauri 环境使用浏览器指纹
+    // 注意：此降级方案仅供参考，设备指纹应优先使用硬件级标识
+    debug("Tauri fingerprint unavailable (fallback mode):", e);
     try {
       const fallback = `${navigator.userAgent}|${screen.width}x${screen.height}|${navigator.language}`;
       cachedFingerprint = fallback;
@@ -66,13 +67,13 @@ async function getDeviceFingerprint(): Promise<string | null> {
 
 async function request(method: string, url: string, data?: any, config?: any) {
   // Wait for settings to load if API_BASE is not set yet
-  if (!API_BASE && !url.startsWith("http")) {
+  if (!API_BASE && API_BASE !== "" && !url.startsWith("http")) {
     await ensureSettingsLoaded();
   }
 
   const fullUrl = url.startsWith("http") ? url : `${API_BASE}${url}`;
 
-  if (!API_BASE && !url.startsWith("http")) {
+  if (!API_BASE && API_BASE !== "" && !url.startsWith("http")) {
     throw new Error("API base URL not configured. Please set it in Settings.");
   }
 
@@ -131,7 +132,10 @@ async function request(method: string, url: string, data?: any, config?: any) {
           debug("Refresh failed", e);
         }
         await clearTokens();
-        window.location.href = "/login";
+        const confirmed = window.confirm("登录已过期，请重新登录。\n\n点击\"确定\"跳转到登录页面。");
+        if (confirmed) {
+          window.location.href = "/login";
+        }
       }
     }
 
@@ -152,7 +156,7 @@ async function request(method: string, url: string, data?: any, config?: any) {
 }
 
 const api = {
-  get: (url: string, config?: any) => request("GET", url, undefined, config),
+  get: <T = any>(url: string, config?: any) => request("GET", url, undefined, config) as Promise<{ data: T }>,
   post: (url: string, data?: any, config?: any) => request("POST", url, data, config),
   put: (url: string, data?: any, config?: any) => request("PUT", url, data, config),
   delete: (url: string, config?: any) => request("DELETE", url, undefined, config),
@@ -178,15 +182,104 @@ export const strategyAPI = {
   validate: (code: string) => api.post("/strategies/validate", { code }),
 };
 
+// backtestAPI types
+export interface BacktestJob {
+  id: string;
+  status: string;
+  scope?: string;
+  symbols?: string[];
+  start_date?: string;
+  end_date?: string;
+  initial_cash?: number;
+  result_summary?: BacktestResultSummary;
+  error_message?: string;
+  created_at: string;
+}
+
+export interface BacktestResultSummary {
+  total_return?: number;
+  annual_return?: number;
+  max_drawdown?: number;
+  sharpe_ratio?: number;
+  sortino_ratio?: number;
+  calmar_ratio?: number;
+  win_rate?: number;
+  total_commission?: number;
+  total_trades?: number;
+  final_value?: number;
+  monthly_returns?: MonthlyReturn[];
+  avg_return?: number;
+  median_return?: number;
+  avg_sharpe?: number;
+  avg_drawdown?: number;
+  total_signals?: number;
+  scanned_count?: number;
+  suitable_count?: number;
+}
+
+export interface MonthlyReturn {
+  month: string;
+  return: number;
+}
+
+export interface BacktestResult {
+  summary: BacktestResultSummary;
+  trades?: Trade[];
+  signals?: Signal[];
+  suitable_stocks?: SuitableStock[];
+}
+
+export interface Trade {
+  timestamp: string;
+  symbol: string;
+  type: "buy" | "sell";
+  amount?: number;
+  price: number;
+  pnl?: number;
+}
+
+export interface Signal {
+  symbol: string;
+  direction: "buy" | "sell";
+  timestamp: string;
+  price: number;
+  score: number;
+}
+
+export interface SuitableStock {
+  symbol: string;
+  score: number;
+  total_return: number;
+  max_drawdown: number;
+  sharpe_ratio?: number;
+  total_trades: number;
+}
+
+export interface KLineData {
+  datetime: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume?: number;
+}
+
+export interface PaginatedTrades {
+  items: Trade[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
 export const backtestAPI = {
   submit: (data: any) => api.post("/backtests", data),
   list: () => api.get("/backtests"),
-  get: (id: string) => api.get(`/backtests/${id}`),
-  result: (id: string) => api.get(`/backtests/${id}/result`),
+  get: (id: string) => api.get<BacktestJob>(`/backtests/${id}`),
+  result: (id: string) => api.get<BacktestResult>(`/backtests/${id}/result`),
   chart: (id: string, agg?: string) =>
-    api.get(`/backtests/${id}/chart${agg ? `?agg=${agg}` : ""}`),
+    api.get<KLineData[]>(`/backtests/${id}/chart${agg ? `?agg=${agg}` : ""}`),
   trades: (id: string, page: number = 1, pageSize: number = 50) =>
-    api.get(`/backtests/${id}/trades?page=${page}&page_size=${pageSize}`),
+    api.get<PaginatedTrades>(`/backtests/${id}/trades?page=${page}&page_size=${pageSize}`),
 };
 
 export const deviceAPI = {
@@ -207,10 +300,10 @@ export const paymentAPI = {
 };
 
 export const marketAPI = {
-  search: (query: string) =>
-    api.get(`/market/stocks?search=${encodeURIComponent(query)}`),
-  history: (symbol: string, start: string, end: string) =>
-    api.get(`/market/history/${symbol}?start_date=${start}&end_date=${end}`),
+  search: (query: string, exchange?: string) =>
+    api.get(`/market/stocks?search=${encodeURIComponent(query)}${exchange ? `&exchange=${exchange}` : ""}`),
+  history: (symbol: string, start: string, end: string, exchange?: string, period?: string) =>
+    api.get(`/market/history/${symbol}?start_date=${start}&end_date=${end}${exchange ? `&exchange=${exchange}` : ""}${period ? `&period=${period}` : ""}`),
 };
 
 export const aiAPI = {

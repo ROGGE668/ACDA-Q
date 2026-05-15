@@ -2,7 +2,7 @@
 //!
 //! 封装 history、sma、ema、buy、sell 等接口。
 
-use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
+use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::MathematicalOps;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
@@ -54,6 +54,7 @@ impl<'a> Context<'a> {
     }
 
     /// 简单移动平均
+    #[allow(dead_code)]
     pub fn sma(&mut self, symbol: &str, period: usize) -> Decimal {
         let hist = self.history(symbol, period);
         if hist.len() < period {
@@ -64,6 +65,7 @@ impl<'a> Context<'a> {
     }
 
     /// 指数移动平均
+    #[allow(dead_code)]
     pub fn ema(&mut self, symbol: &str, period: usize) -> Decimal {
         let lookback = period * 2;
         let hist = self.history(symbol, lookback);
@@ -80,6 +82,7 @@ impl<'a> Context<'a> {
     }
 
     /// RSI (相对强弱指标)
+    #[allow(dead_code)]
     pub fn rsi(&mut self, symbol: &str, period: usize) -> Decimal {
         let hist = self.history(symbol, period + 1);
         if hist.len() < period + 1 {
@@ -112,6 +115,7 @@ impl<'a> Context<'a> {
 
     /// Bollinger Bands (布林带)
     /// 返回 (上轨, 中轨, 下轨)
+    #[allow(dead_code)]
     pub fn bollinger_bands(&mut self, symbol: &str, period: usize) -> (Decimal, Decimal, Decimal) {
         let hist = self.history(symbol, period);
         if hist.len() < period {
@@ -140,6 +144,7 @@ impl<'a> Context<'a> {
 
     /// MACD (指数平滑异同平均线)
     /// 返回 (macd_line, signal_line, histogram)
+    #[allow(dead_code)]
     pub fn macd(&mut self, symbol: &str, fast: usize, slow: usize, signal: usize) -> (Decimal, Decimal, Decimal) {
         let total = slow + signal;
         let hist = self.history(symbol, total * 2);

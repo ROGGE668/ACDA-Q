@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use axum::extract::{Json, Path, Query, State};
 use serde::Deserialize;
-use sqlx::query_as;
 use std::path::PathBuf;
 use uuid::Uuid;
 
@@ -9,7 +8,7 @@ use crate::api::AppState;
 use crate::error::AppError;
 use crate::middleware::auth::CurrentUser;
 use crate::models::{BacktestJob, BacktestJobOut, BacktestResult, BacktestSubmit};
-use crate::queue::{BacktestPayload, TaskStatus};
+use crate::queue::{BacktestPayload};
 
 #[derive(Deserialize)]
 pub struct ListParams {
@@ -95,7 +94,7 @@ pub async fn submit_backtest(
     let strategy_code = payload.strategy_code.clone().unwrap_or_default();
     let start_date = payload.start_date.clone().unwrap_or_else(|| "2023-01-01".to_string());
     let end_date = payload.end_date.clone().unwrap_or_else(|| "2023-12-31".to_string());
-    let params = payload.params.clone().unwrap_or(serde_json::json!({}));
+    let _params = payload.params.clone().unwrap_or(serde_json::json!({}));
     let initial_cash = payload.initial_cash.unwrap_or_else(|| rust_decimal::Decimal::from(1_000_000));
 
     // 检查回测配额（简化版，实际应查 subscription 表）
@@ -151,8 +150,8 @@ pub async fn submit_backtest(
     .bind(payload.strategy_id)
     .bind(&scope)
     .bind(&symbols)
-    .bind(payload.start_date.as_ref().map(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok()).flatten())
-    .bind(payload.end_date.as_ref().map(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok()).flatten())
+    .bind(payload.start_date.as_ref().and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok()))
+    .bind(payload.end_date.as_ref().and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok()))
     .bind(initial_cash)
     .bind(payload.params.unwrap_or(serde_json::json!({})))
     .fetch_one(&state.db)
@@ -351,7 +350,7 @@ pub async fn get_backtest_trades(
     }
 
     let page = params.page.unwrap_or(1).max(1);
-    let page_size = params.page_size.unwrap_or(50).max(1).min(200);
+    let page_size = params.page_size.unwrap_or(50).clamp(1, 200);
     let total = trades.len();
 
     // 按时间倒序

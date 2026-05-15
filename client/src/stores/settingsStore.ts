@@ -25,7 +25,7 @@ async function getStore(): Promise<Store> {
 }
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
-  apiBase: import.meta.env.VITE_API_BASE || "http://124.220.70.210:8000/api/v1",
+  apiBase: import.meta.env.VITE_API_BASE || "",
   theme: "dark",
   globalShortcutEnabled: true,
   loaded: false,
@@ -37,7 +37,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       const theme = await store.get<"dark" | "light">("theme");
       const shortcut = await store.get<boolean>("global_shortcut_enabled");
 
-      // 如果 Store 中的 api_base 无效（空或 localhost），使用默认值
+      // 如果 Store 中的 api_base 有效，使用它；否则保持空字符串（让用户配置）
       const validApiBase =
         apiBase && !apiBase.includes("localhost") && !apiBase.includes("127.0.0.1")
           ? apiBase

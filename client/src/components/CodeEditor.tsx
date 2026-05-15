@@ -80,8 +80,9 @@ export default function CodeEditor({ value, onChange, rows = 16, maxLength }: Co
           pointerEvents: "none",
           zIndex: 1,
         }}
-        dangerouslySetInnerHTML={{ __html: highlighted }}
-      />
+      >
+        {highlighted}
+      </pre>
       <textarea
         ref={textareaRef}
         value={value}

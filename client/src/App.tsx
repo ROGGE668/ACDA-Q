@@ -27,11 +27,12 @@ function AuthInitializer({ children }: { children: React.ReactNode }) {
 function App() {
   return (
     <AuthInitializer>
+    <ErrorBoundary>
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/privacy" element={<PrivacyPolicyPage />} />
       <Route path="/product" element={<ProductInfoPage />} />
-      <Route path="/" element={<PrivateRoute><ErrorBoundary><Layout /></ErrorBoundary></PrivateRoute>}>
+      <Route path="/" element={<PrivateRoute><Layout /></PrivateRoute>}>
         <Route index element={<DashboardPage />} />
         <Route path="strategies" element={<StrategyListPage />} />
         <Route path="strategies/new" element={<StrategyEditorPage />} />
@@ -43,6 +44,7 @@ function App() {
         <Route path="subscription" element={<SubscriptionPage />} />
       </Route>
     </Routes>
+    </ErrorBoundary>
     </AuthInitializer>
   );
 }

@@ -40,6 +40,7 @@ struct Choice {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct Usage {
     prompt_tokens: u32,
     completion_tokens: u32,

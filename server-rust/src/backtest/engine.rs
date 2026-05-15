@@ -1,6 +1,6 @@
 //! 回测引擎 — 事件驱动主循环 + 绩效分析
 
-use chrono::{Datelike, NaiveDateTime};
+use chrono::{Datelike};
 use rust_decimal::prelude::FromPrimitive;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
@@ -89,13 +89,13 @@ impl Engine {
             self.broker.execute_pending_orders(&group_bars);
 
             // 记录净值
-            println!("After execute: trades={}, equity={}", self.broker.trades.len(), self.broker.equity_curve.len());
+            tracing::debug!("After execute: trades={}, equity={}", self.broker.trades.len(), self.broker.equity_curve.len());
             self.broker.record_snapshot(date.and_hms_opt(0, 0, 0).unwrap());
-            println!("After snapshot: equity={}", self.broker.equity_curve.len());
+            tracing::debug!("After snapshot: equity={}", self.broker.equity_curve.len());
         }
 
         strategy.on_exit();
-        println!("Before calculate_performance: trades={}", self.broker.trades.len());
+        tracing::debug!("Before calculate_performance: trades={}", self.broker.trades.len());
         calculate_performance(&self.broker, self.initial_cash, self.risk_free_rate)
     }
 }

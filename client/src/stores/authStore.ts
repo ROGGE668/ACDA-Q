@@ -65,14 +65,20 @@ export const useAuthStore = create<AuthState>()(
       },
 
       logout: async () => {
+        const currentPath = window.location.pathname;
+        // 清理 token 和状态
+        await clearTokens();
+        set({ user: null, isAuthenticated: false });
+        // authAPI.logout 失败不阻止登出
         try {
           await authAPI.logout();
         } catch (_) {
           // ignore
         }
-        await clearTokens();
-        set({ user: null, isAuthenticated: false });
-        window.location.href = "/login";
+        // 只有当前不在 login 页时才跳转
+        if (currentPath !== "/login") {
+          window.location.href = "/login";
+        }
       },
 
       fetchUser: async () => {
@@ -81,9 +87,13 @@ export const useAuthStore = create<AuthState>()(
           set({ user: res.data, isAuthenticated: true });
           // 登录成功后自动注册设备
           await registerDeviceIfNeeded();
-        } catch (e) {
-          set({ user: null, isAuthenticated: false });
-          await clearTokens();
+        } catch (e: any) {
+          // 区分 401（token 过期需登出）和其他错误（网络错误可重试，不登出）
+          if (e?.response?.status === 401) {
+            set({ user: null, isAuthenticated: false });
+            await clearTokens();
+          }
+          // 网络错误或其他错误不登出，静默保持未认证状态
         }
       },
     }),

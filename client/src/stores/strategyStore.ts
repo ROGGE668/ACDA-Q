@@ -31,10 +31,6 @@ async function getStore(): Promise<Store> {
   return storeInstance;
 }
 
-function generateId(): string {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-}
-
 export const useStrategyStore = create<StrategyState>((set, get) => ({
   strategies: [],
   loading: false,
@@ -57,29 +53,23 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
   },
 
   saveStrategy: async (strategy) => {
+    if (!strategy.id) {
+      throw new Error("Strategy ID is required for update");
+    }
     const store = await getStore();
-    const existing = strategy.id ? get().strategies.find((s) => s.id === strategy.id) : undefined;
+    const existing = get().strategies.find((s) => s.id === strategy.id);
+    if (!existing) {
+      throw new Error(`Strategy with id ${strategy.id} not found`);
+    }
     const now = new Date().toISOString();
 
-    let saved: Strategy;
-    if (existing) {
-      saved = {
-        ...existing,
-        ...strategy,
-        updated_at: now,
-      } as Strategy;
-    } else {
-      saved = {
-        ...strategy,
-        id: generateId(),
-        created_at: now,
-        updated_at: now,
-      } as Strategy;
-    }
+    const saved: Strategy = {
+      ...existing,
+      ...strategy,
+      updated_at: now,
+    } as Strategy;
 
-    const updated = existing
-      ? get().strategies.map((s) => (s.id === saved.id ? saved : s))
-      : [...get().strategies, saved];
+    const updated = get().strategies.map((s) => (s.id === saved.id ? saved : s));
 
     await store.set("strategies", updated);
     await store.save();

@@ -9,6 +9,7 @@ use axum::{
 use prometheus::{
     CounterVec, Encoder, HistogramOpts, HistogramVec, Opts, Registry, TextEncoder,
 };
+use tracing::error;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -28,35 +29,60 @@ impl Metrics {
     pub fn new() -> Self {
         let registry = Registry::new();
 
-        let request_count = CounterVec::new(
+        let request_count = match CounterVec::new(
             Opts::new("http_requests_total", "Total HTTP requests"),
             &["method", "endpoint", "status_code"],
-        )
-        .expect("metric can be created");
+        ) {
+            Ok(m) => m,
+            Err(e) => {
+                error!("Failed to create request_count metric: {}", e);
+                CounterVec::new(Opts::new("http_requests_total", "Total HTTP requests"), &["method", "endpoint", "status_code"]).expect("fallback metric can be created")
+            }
+        };
 
-        let request_duration = HistogramVec::new(
+        let request_duration = match HistogramVec::new(
             HistogramOpts::new("http_request_duration_seconds", "HTTP request duration"),
             &["method", "endpoint"],
-        )
-        .expect("metric can be created");
+        ) {
+            Ok(m) => m,
+            Err(e) => {
+                error!("Failed to create request_duration metric: {}", e);
+                HistogramVec::new(HistogramOpts::new("http_request_duration_seconds", "HTTP request duration"), &["method", "endpoint"]).expect("fallback metric can be created")
+            }
+        };
 
-        let backtest_total = CounterVec::new(
+        let backtest_total = match CounterVec::new(
             Opts::new("backtest_total", "Total backtests"),
             &["status", "scope"],
-        )
-        .expect("metric can be created");
+        ) {
+            Ok(m) => m,
+            Err(e) => {
+                error!("Failed to create backtest_total metric: {}", e);
+                CounterVec::new(Opts::new("backtest_total", "Total backtests"), &["status", "scope"]).expect("fallback metric can be created")
+            }
+        };
 
-        let backtest_duration = HistogramVec::new(
+        let backtest_duration = match HistogramVec::new(
             HistogramOpts::new("backtest_duration_seconds", "Backtest execution duration"),
             &["scope"],
-        )
-        .expect("metric can be created");
+        ) {
+            Ok(m) => m,
+            Err(e) => {
+                error!("Failed to create backtest_duration metric: {}", e);
+                HistogramVec::new(HistogramOpts::new("backtest_duration_seconds", "Backtest execution duration"), &["scope"]).expect("fallback metric can be created")
+            }
+        };
 
-        let ai_generation_total = CounterVec::new(
+        let ai_generation_total = match CounterVec::new(
             Opts::new("ai_generation_total", "Total AI generations"),
             &["status"],
-        )
-        .expect("metric can be created");
+        ) {
+            Ok(m) => m,
+            Err(e) => {
+                error!("Failed to create ai_generation_total metric: {}", e);
+                CounterVec::new(Opts::new("ai_generation_total", "Total AI generations"), &["status"]).expect("fallback metric can be created")
+            }
+        };
 
         registry.register(Box::new(request_count.clone())).ok();
         registry.register(Box::new(request_duration.clone())).ok();

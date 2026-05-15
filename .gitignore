@@ -1,41 +1,8 @@
-# Dependencies
-client/node_modules/
-server/__pycache__/
-**/__pycache__/
-**/*.pyc
-.pytest_cache/
-
-# Build outputs
-client/dist/
-client/src-tauri/target/
-
-# Environment
-.env
-.env.local
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Logs
-*.log
-npm-debug.log*
-
-# Database
-postgres_data/
-timescale_data/
-redis_data/
-
-# Uploads
-uploads/
-tmp/
-
-# Build/deploy artifacts (临时打包产物,不入库)
+target/
+node_modules/
+dist/
+*.dmg
 *.tar.gz
-deploy/
+__pycache__/
+*.pyc
+*.pyo

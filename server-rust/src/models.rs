@@ -9,6 +9,7 @@ use uuid::Uuid;
 // ========== Auth ==========
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct TokenPair {
     pub access_token: String,
     pub refresh_token: String,
@@ -153,6 +154,7 @@ pub struct BacktestResult {
 // ========== Refresh Token ==========
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct RefreshToken {
     pub id: Uuid,
     pub user_id: Uuid,
@@ -255,6 +257,7 @@ pub struct DailyBar {
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct AdjFactor {
     pub symbol: String,
     pub trade_date: chrono::NaiveDate,
@@ -263,6 +266,7 @@ pub struct AdjFactor {
 
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct BacktestCache {
     pub cache_hash: String,
     pub strategy_id: Uuid,

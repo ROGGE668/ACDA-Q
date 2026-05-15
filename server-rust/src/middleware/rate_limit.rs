@@ -12,7 +12,7 @@ use redis::AsyncCommands;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::{debug, warn};
+use tracing::{debug, warn, error};
 
 use crate::middleware::auth::CurrentUser;
 
@@ -88,7 +88,10 @@ pub async fn rate_limit_middleware(
     let redis_key = format!("{}:{}", state.config.key_prefix, key);
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
+        .map_err(|e| {
+            error!("SystemTime error: {}", e);
+            RateLimitError::Internal
+        })?
         .as_secs() as f64;
     let window_start = now - state.config.window_seconds as f64;
 

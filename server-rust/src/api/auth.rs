@@ -1,14 +1,12 @@
 use std::sync::Arc;
 use axum::extract::{Json, State};
-use axum::http::StatusCode;
-use sqlx::query_as;
 use uuid::Uuid;
 
 use crate::api::AppState;
 use crate::auth::{create_access_token, create_refresh_token, decode_token, hash_password, verify_password};
 use crate::error::AppError;
 use crate::middleware::auth::CurrentUser;
-use crate::models::{TokenPair, UserLogin, UserOut, UserRegister};
+use crate::models::{UserLogin, UserOut, UserRegister};
 use crate::models::User;
 
 pub async fn register(
@@ -95,7 +93,7 @@ pub async fn login(
     .await?;
 
     let user = match user {
-        Some(u) if verify_password(&payload.password, &u.password_hash) => u,
+        Some(u) if verify_password(&payload.password, &u.password_hash)? => u,
         _ => return Err(AppError::Auth("Invalid credentials".to_string())),
     };
 
@@ -242,7 +240,7 @@ pub async fn get_me(
     .bind(current_user.id)
     .fetch_one(&state.db)
     .await
-    .unwrap_or_else(|_: sqlx::Error| 0);
+    .unwrap_or(0);
 
     Ok(Json(UserOut {
         id: user.id,

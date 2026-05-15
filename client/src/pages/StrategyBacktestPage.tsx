@@ -15,6 +15,7 @@ export default function StrategyBacktestPage() {
   const [fullMarketScan, setFullMarketScan] = useState(false);
 
   const [selectedStocks, setSelectedStocks] = useState<string[]>([]);
+  const [exchange, setExchange] = useState("cn");
 
   const [submitting, setSubmitting] = useState(false);
 
@@ -88,6 +89,8 @@ export default function StrategyBacktestPage() {
               onToggleStock={toggleStock}
               fullMarketScan={fullMarketScan}
               onFullMarketScanChange={setFullMarketScan}
+              exchange={exchange}
+              onExchangeChange={setExchange}
             />
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "0.75rem" }}>

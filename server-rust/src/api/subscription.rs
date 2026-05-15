@@ -1,7 +1,6 @@
 use std::sync::Arc;
-use axum::extract::{Json, Path, Query, State};
+use axum::extract::{Json, Path, State};
 use serde::Deserialize;
-use sqlx::query_as;
 use uuid::Uuid;
 
 use crate::api::AppState;

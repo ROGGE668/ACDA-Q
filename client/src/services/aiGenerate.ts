@@ -20,11 +20,36 @@ export interface AIGenerateResult {
   tokens_used?: number;
 }
 
+function isValidHttpsUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    if (u.protocol !== "https:") return false;
+    const host = u.hostname;
+    // Block private / internal IPs
+    const isPrivate =
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "::1" ||
+      /^192\.168\.\d+\.\d+$/.test(host) ||
+      /^10\.\d+\.\d+\.\d+$/.test(host) ||
+      /^172\.(1[6-9]|2\d|3[01])\.\d+\.\d+$/.test(host) ||
+      /^169\.254\.\d+\.\d+$/.test(host) ||
+      host.endsWith(".local");
+    return !isPrivate;
+  } catch {
+    return false;
+  }
+}
+
 export async function generateStrategy(prompt: string): Promise<AIGenerateResult> {
   const { deepseekApiKey, deepseekBaseUrl, deepseekModel } = useAISettingsStore.getState();
 
   if (!deepseekApiKey.trim()) {
     throw new Error("请先设置 DeepSeek API Key");
+  }
+
+  if (!isValidHttpsUrl(deepseekBaseUrl)) {
+    throw new Error("DeepSeek Base URL 必须是 https 地址，且不能是内网 IP 或 localhost");
   }
 
   const response = await fetch(`${deepseekBaseUrl}/chat/completions`, {
@@ -67,7 +92,7 @@ export async function generateStrategy(prompt: string): Promise<AIGenerateResult
   };
 }
 
-export async function extractParamsFromCode(code: string): Promise<{ params: Array<{ name: string; default: any; type: string }> }> {
+export async function extractParamsFromCode(code: string, _signal?: AbortSignal): Promise<{ params: Array<{ name: string; default: any; type: string }> }> {
   // 本地正则提取参数，不调用远程API
   const regex = /self\.params\.get\(["'](\w+)["']\s*,\s*([^)]+)\)/g;
   const found: Array<{ name: string; default: any; type: string }> = [];

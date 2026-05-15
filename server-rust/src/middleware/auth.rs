@@ -20,8 +20,10 @@ use crate::db::DbPool;
 #[derive(Debug, Clone)]
 pub struct CurrentUser {
     pub id: Uuid,
+    #[allow(dead_code)]
     pub email: String,
     pub is_admin: bool,
+    #[allow(dead_code)]
     pub tier: String,
 }
 

@@ -2,13 +2,23 @@
 //!
 //! 基于 Redis Streams 实现，支持任务分发、状态追踪、重试机制。
 
-use redis::{AsyncCommands, Client, RedisResult};
+use redis::{aio::PubSub, AsyncCommands, Client, RedisResult};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use serde_json;
 use std::time::Duration;
+use thiserror::Error;
 use tokio::time::interval;
 use tracing::{error, info};
 use uuid::Uuid;
+
+#[derive(Error, Debug)]
+pub enum QueueError {
+    #[error("Serialization error: {0}")]
+    Serialization(#[from] serde_json::Error),
+    #[error("Redis error: {0}")]
+    Redis(#[from] redis::RedisError),
+    #[error("Task deserialization failed: {0}")]
+    TaskDeserialization(String),
+}
 
 /// 任务状态
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -71,7 +81,9 @@ impl Queue {
 
     /// 订阅指定 job 的进度频道（返回独立的 PubSub 连接）
     /// 每个 WebSocket 连接需要自己的订阅连接，不能跨连接共享。
-    pub async fn subscribe_progress(&self, job_id: &str) -> RedisResult<redis::aio::PubSub> {
+    pub async fn subscribe_progress(&self, job_id: &str) -> RedisResult<PubSub> {
+        // Use get_async_connection (not multiplexed) since PubSub requires a dedicated connection
+        #[allow(deprecated)]
         let conn = self.client.get_async_connection().await?;
         let mut pubsub = conn.into_pubsub();
         let channel = format!("backtest:progress:{}", job_id);
@@ -108,7 +120,7 @@ impl Queue {
         let task = Task {
             id: task_id.clone(),
             task_type: task_type.to_string(),
-            payload: payload,
+            payload,
             status: TaskStatus::Pending,
             retry_count: 0,
             max_retries: 3,
@@ -118,7 +130,10 @@ impl Queue {
             error_message: None,
         };
 
-        let task_json = serde_json::to_string(&task).unwrap_or_default();
+        let task_json = serde_json::to_string(&task).map_err(|e| {
+            error!("Failed to serialize task: {}", e);
+            redis::RedisError::from((redis::ErrorKind::IoError, "Task serialization failed", e.to_string()))
+        })?;
 
         let id: String = conn
             .xadd(&self.stream_key, "*", &[("task", task_json)])
@@ -132,7 +147,7 @@ impl Queue {
     pub async fn consume_task<T: DeserializeOwned>(
         &self,
         _block_ms: usize,
-    ) -> RedisResult<Option<(String, Task<T>)>> {
+    ) -> Result<Option<(String, Task<T>)>, QueueError> {
         let mut conn = self.client.get_multiplexed_async_connection().await?;
 
         // 使用 redis::cmd 手动构建 XREADGROUP 命令
@@ -169,18 +184,8 @@ impl Queue {
                                                     redis::Value::Data(v) => String::from_utf8_lossy(v).to_string(),
                                                     _ => continue,
                                                 };
-                                                let task: Task<T> = serde_json::from_str(&val).unwrap_or_else(|_| Task {
-                                                    id: entry_id.clone(),
-                                                    task_type: "unknown".to_string(),
-                                                    payload: serde_json::from_str("{}").unwrap_or_else(|_| panic!("Failed to parse default payload")),
-                                                    status: TaskStatus::Failed,
-                                                    retry_count: 0,
-                                                    max_retries: 0,
-                                                    created_at: chrono::Utc::now().to_rfc3339(),
-                                                    started_at: None,
-                                                    completed_at: None,
-                                                    error_message: Some("Failed to deserialize task".to_string()),
-                                                });
+                                                let task: Task<T> = serde_json::from_str(&val)
+                                                    .map_err(|e| QueueError::TaskDeserialization(e.to_string()))?;
                                                 return Ok(Some((entry_id, task)));
                                             }
                                         }

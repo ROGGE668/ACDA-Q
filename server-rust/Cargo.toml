@@ -1,9 +1,9 @@
 [package]
 name = "acda-q"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["ACDA-Q Team"]
-description = "A-share quantitative backtest engine and API service in Rust"
+description = "A-share quantitative backtest engine and API service in Rust (Pure Rust implementation)"
 rust-version = "1.75"
 
 [[bin]]
@@ -72,9 +72,6 @@ async-trait = "0.1"
 # Streaming / WebSocket
 futures = "0.3"
 
-# PyO3 (Python interop, optional)
-pyo3 = { version = "0.21", features = ["extension-module"], optional = true }
-
 # Other
 itertools = "0.12"
 sha2 = "0.10"
@@ -83,7 +80,6 @@ hex = "0.4"
 [features]
 default = []
 api-server = []
-pyo3-binding = ["pyo3"]
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

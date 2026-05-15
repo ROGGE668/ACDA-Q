@@ -22,29 +22,30 @@ mod market;
 mod subscription;
 mod admin;
 mod ai;
+mod health;
 
 #[derive(Clone)]
 pub struct AppState {
     pub db: DbPool,
+    #[allow(dead_code)]
     pub sync_db: DbPool,
     pub ts_db: DbPool,
     pub settings: Arc<Settings>,
     pub metrics: Arc<Metrics>,
+    #[allow(dead_code)]
     pub ws_manager: WsManager,
     pub queue: Arc<Queue>,
 }
 
 /// 构建所有路由
 pub fn create_router(state: AppState) -> Router {
-    let app_state = Arc::new(state.clone());
+    let state = Arc::new(state);
 
-    // 认证中间件状态
     let auth_state = Arc::new(AuthState {
         db: state.db.clone(),
         settings: state.settings.clone(),
     });
 
-    // 限流中间件状态
     let backtest_rl_state = Arc::new(RateLimitState {
         redis_url: state.settings.redis_url.clone(),
         config: RateLimitConfig::backtest(),
@@ -58,7 +59,6 @@ pub fn create_router(state: AppState) -> Router {
         config: RateLimitConfig::auth(),
     });
 
-    // === 公开路由（无需认证）===
     let auth_public = Router::new()
         .route("/register", post(auth::register))
         .route("/login", post(auth::login))
@@ -66,14 +66,12 @@ pub fn create_router(state: AppState) -> Router {
         .route_layer(middleware::from_fn_with_state(auth_rl_state, rate_limit_middleware))
         .route("/logout", post(auth::logout));
 
-    // /me 需要认证
     let auth_me = Router::new()
         .route("/me", get(auth::get_me))
         .route_layer(middleware::from_fn_with_state(auth_state.clone(), require_auth));
 
     let auth_routes = auth_public.merge(auth_me);
 
-    // === 需要认证的路由 ===
     let strategy_routes = Router::new()
         .route("/", get(strategies::list_strategies).post(strategies::create_strategy))
         .route("/:id", get(strategies::get_strategy).put(strategies::update_strategy).delete(strategies::delete_strategy))
@@ -107,7 +105,6 @@ pub fn create_router(state: AppState) -> Router {
         .route("/payments/:order_no", get(subscription::get_payment_status))
         .route("/payments/:order_no/cancel", post(subscription::cancel_payment));
 
-    // === 管理员路由（认证 + 管理员权限）===
     let admin_routes = Router::new()
         .route("/stats", get(admin::get_dashboard_stats))
         .route("/users", get(admin::list_users))
@@ -125,7 +122,6 @@ pub fn create_router(state: AppState) -> Router {
         .route("/sync/daily-bars", post(admin::sync_daily_bars))
         .layer(middleware::from_fn(require_admin));
 
-    // 合并受保护路由并挂载认证中间件
     let protected = Router::new()
         .nest("/api/v1/strategies", strategy_routes)
         .nest("/api/v1/backtests", backtest_routes)
@@ -136,13 +132,11 @@ pub fn create_router(state: AppState) -> Router {
         .route_layer(middleware::from_fn_with_state(auth_state, require_auth));
 
     Router::new()
-        .route("/health", get(health_check))
+        .route("/health", get(health::health_handler))
+        .route("/health/live", get(health::liveness_handler))
+        .route("/health/ready", get(health::readiness_handler))
         .route("/metrics", get(metrics_handler))
         .nest("/api/v1/auth", auth_routes)
         .merge(protected)
-        .with_state(app_state)
-}
-
-async fn health_check() -> &'static str {
-    "{\"status\":\"healthy\"}"
+        .with_state(state)
 }

@@ -141,7 +141,7 @@ pub fn calculate_performance(
         total_trades: broker.trades.len() as u64,
         total_commission,
         final_value: final_val,
-        duration_days: duration.max(0) as u64,
+        duration_days: duration.max(0),
         trading_days,
         monthly_returns,
     }

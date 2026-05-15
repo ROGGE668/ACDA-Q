@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { backtestAPI } from "../services/api";
+import type { BacktestResultSummary } from "../services/api";
 
 interface BacktestJob {
   id: string;
@@ -7,7 +8,7 @@ interface BacktestJob {
   symbols?: string[];
   start_date?: string;
   end_date?: string;
-  result_summary?: Record<string, any>;
+  result_summary?: BacktestResultSummary;
   created_at: string;
 }
 

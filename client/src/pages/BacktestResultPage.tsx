@@ -1,15 +1,18 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams } from "react-router-dom";
 import { backtestAPI, marketAPI, getApiBase } from "../services/api";
+import type { BacktestJob, BacktestResult, KLineData, Trade, Signal, SuitableStock, PaginatedTrades, MonthlyReturn } from "../services/api";
 import KLineChart from "../components/KLineChart";
 import EquityCurveChart from "../components/EquityCurveChart";
 
 export default function BacktestResultPage() {
   const { id } = useParams();
-  const [job, setJob] = useState<any>(null);
-  const [result, setResult] = useState<any>(null);
-  const [klineData, setKlineData] = useState<any[]>([]);
+  const [job, setJob] = useState<BacktestJob | null>(null);
+  const [result, setResult] = useState<BacktestResult | null>(null);
+  const [klineData, setKlineData] = useState<KLineData[]>([]);
   const [activeSymbol, setActiveSymbol] = useState<string>("");
+  const [period, setPeriod] = useState("1d");
+  const [exchange, setExchange] = useState<string>("cn");
 
   // WebSocket ref
   const wsRef = useRef<WebSocket | null>(null);
@@ -17,8 +20,9 @@ export default function BacktestResultPage() {
 
   // Paging for trades
   const [tradesPage, setTradesPage] = useState(1);
-  const [tradesData, setTradesData] = useState<any>(null);
+  const [tradesData, setTradesData] = useState<PaginatedTrades | null>(null);
   const [tradesLoading, setTradesLoading] = useState(false);
+  const [klineError, setKlineError] = useState<string | null>(null);
 
   // Load initial job + fallback poll
   useEffect(() => {
@@ -56,7 +60,9 @@ export default function BacktestResultPage() {
           clearInterval(fallbackPollRef.current);
           fallbackPollRef.current = null;
         }
-      }).catch(() => {});
+      }).catch((e) => {
+        console.error("[Polling] fallback poll error:", e);
+      });
     }, 3000);
 
     return () => {
@@ -64,50 +70,68 @@ export default function BacktestResultPage() {
     };
   }, [id]);
 
-  // WebSocket connection
+  // WebSocket connection with limited retries
   useEffect(() => {
     if (!id) return;
     if (wsRef.current) return;
 
     const apiBase = getApiBase();
     const wsUrl = `${apiBase.replace(/^http/, "ws")}/ws/backtest/${id}`;
-    try {
-      const ws = new WebSocket(wsUrl);
-      wsRef.current = ws;
+    let retryCount = 0;
+    const maxRetries = 3;
 
-      ws.onopen = () => {
-        console.log("[WS] Connected", wsUrl);
-        if (fallbackPollRef.current) {
-          clearInterval(fallbackPollRef.current);
-          fallbackPollRef.current = null;
-        }
-      };
+    const connect = () => {
+      try {
+        const ws = new WebSocket(wsUrl);
+        wsRef.current = ws;
 
-      ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-          if (msg.status) {
-            setJob((prev: any) => (prev ? { ...prev, status: msg.status } : prev));
-            if (msg.status === "success" && !result) {
-              backtestAPI.result(id).then((r) => setResult(r.data));
-            }
+        ws.onopen = () => {
+          console.log("[WS] Connected", wsUrl);
+          retryCount = 0;
+          if (fallbackPollRef.current) {
+            clearInterval(fallbackPollRef.current);
+            fallbackPollRef.current = null;
           }
-        } catch (e) {
-          console.error("[WS] Message parse error:", e);
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const msg = JSON.parse(event.data);
+            if (msg.status) {
+              setJob((prev: BacktestJob | null) => (prev ? { ...prev, status: msg.status } : prev));
+              if (msg.status === "success" && !result) {
+                backtestAPI.result(id).then((r) => setResult(r.data));
+              }
+            }
+          } catch (e) {
+            console.error("[WS] Message parse error:", e);
+          }
+        };
+
+        ws.onerror = () => {
+          console.warn("[WS] Error");
+        };
+
+        ws.onclose = () => {
+          wsRef.current = null;
+          if (retryCount < maxRetries) {
+            retryCount++;
+            console.log(`[WS] Reconnecting (${retryCount}/${maxRetries})...`);
+            setTimeout(connect, 2000 * retryCount);
+          } else {
+            console.warn("[WS] Max retries reached, falling back to polling");
+          }
+        };
+      } catch (e) {
+        console.warn("[WS] Connection failed:", e);
+        if (retryCount < maxRetries) {
+          retryCount++;
+          setTimeout(connect, 2000 * retryCount);
         }
-      };
+      }
+    };
 
-      ws.onerror = () => {
-        console.warn("[WS] Error, falling back to polling");
-        wsRef.current = null;
-      };
-
-      ws.onclose = () => {
-        wsRef.current = null;
-      };
-    } catch (e) {
-      console.warn("[WS] Connection failed:", e);
-    }
+    connect();
 
     return () => {
       if (wsRef.current) {
@@ -129,13 +153,17 @@ export default function BacktestResultPage() {
     if (!start || !end) return;
 
     const target = activeSymbol || symbols[0];
-    marketAPI.history(target, start, end).then((res) => {
+    marketAPI.history(target, start, end, exchange, period).then((res) => {
       setKlineData(res.data?.data || []);
+      if (!res.data?.data?.length) {
+        console.warn(`[K-line] No data returned for ${target}`);
+      }
     }).catch((e) => {
       console.error("K-line load failed:", e);
       setKlineData([]);
+      setKlineError(`K线加载失败: ${e?.message || "未知错误"}`);
     });
-  }, [job, result, activeSymbol]);
+  }, [job, result, activeSymbol, exchange, period]);
 
   // Load trades with pagination
   const loadTrades = useCallback(async (page: number) => {
@@ -158,7 +186,10 @@ export default function BacktestResultPage() {
     }
   }, [job, loadTrades]);
 
-  if (!job) return <div>加载中...</div>;
+  const escapeHtml = (str: string): string =>
+    str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+  if (!job) return <div style={{textAlign:"center",padding:"2rem",color:"var(--muted)"}}>加载中...</div>;
 
   const summary = job.result_summary || result?.summary || {};
   const isScan = job.scope === "scan" || !!result?.signals;
@@ -170,8 +201,8 @@ export default function BacktestResultPage() {
   // Trade markers for K-line
   const allTrades = result?.trades || [];
   const tradeMarkers = allTrades
-    .filter((t: any) => t.symbol === (activeSymbol || symbols[0]))
-    .map((t: any) => ({
+    .filter((t: Trade) => t.symbol === (activeSymbol || symbols[0]))
+    .map((t: Trade) => ({
       time: t.timestamp,
       price: t.price,
       type: (t.type === "buy" ? "BUY" : "SELL") as "BUY" | "SELL",
@@ -180,17 +211,26 @@ export default function BacktestResultPage() {
 
   const exportCSV = () => {
     if (!allTrades.length && !signals.length) return;
+
+    const escapeCSV = (val: string | number | undefined | null): string => {
+      const str = String(val ?? "");
+      if (str.includes(",") || str.includes('"') || str.includes("\n")) {
+        return `"${str.replace(/"/g, '""')}"`;
+      }
+      return str;
+    };
+
     const rows = isScan
       ? [
           ["标的", "方向", "时间", "价格", "评分"],
-          ...signals.map((s: any) => [s.symbol, s.direction, s.timestamp, s.price, s.score]),
+          ...signals.map((s: Signal) => [s.symbol, s.direction, s.timestamp, s.price, s.score].map(escapeCSV)),
         ]
       : [
           ["时间", "标的", "类型", "数量", "价格", "盈亏"],
-          ...allTrades.map((t: any) => [t.timestamp, t.symbol, t.type, t.amount, t.price, t.pnl]),
+          ...allTrades.map((t: Trade) => [t.timestamp, t.symbol, t.type, t.amount, t.price, t.pnl].map(escapeCSV)),
         ];
     const csv = rows.map((r) => r.join(",")).join("\n");
-    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -218,13 +258,13 @@ export default function BacktestResultPage() {
         <div className="card" style={{ marginTop: "1rem" }}>
           <h3>扫描整体表现</h3>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "1rem", marginTop: "0.75rem" }}>
-            <Metric label="平均收益" value={`${(summary.avg_return * 100).toFixed(2)}%`} color={summary.avg_return >= 0 ? "#22c55e" : "#ef4444"} />
-            <Metric label="中位数收益" value={`${(summary.median_return * 100).toFixed(2)}%`} />
+            <Metric label="平均收益" value={`${((summary.avg_return ?? 0) * 100).toFixed(2)}%`} color={(summary.avg_return ?? 0) >= 0 ? "#22c55e" : "#ef4444"} />
+            <Metric label="中位数收益" value={`${((summary.median_return ?? 0) * 100).toFixed(2)}%`} />
             <Metric label="平均夏普" value={summary.avg_sharpe?.toFixed(2)} />
-            <Metric label="平均回撤" value={`${(summary.avg_drawdown * 100).toFixed(2)}%`} color="#ef4444" />
+            <Metric label="平均回撤" value={`${((summary.avg_drawdown ?? 0) * 100).toFixed(2)}%`} color="#ef4444" />
             <Metric label="信号总数" value={summary.total_signals} />
             <Metric label="扫描标的数" value={summary.scanned_count} />
-            <Metric label="胜率" value={`${(summary.win_rate * 100).toFixed(1)}%`} />
+            <Metric label="胜率" value={`${((summary.win_rate ?? 0) * 100).toFixed(1)}%`} />
             <Metric label="适合策略数" value={summary.suitable_count ?? suitableStocks.length} />
           </div>
         </div>
@@ -246,7 +286,7 @@ export default function BacktestResultPage() {
                 </tr>
               </thead>
               <tbody>
-                {suitableStocks.map((s: any, i: number) => (
+                {suitableStocks.map((s: SuitableStock, i: number) => (
                   <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
                     <td style={{ padding: "0.25rem" }}>{s.symbol}</td>
                     <td style={{ padding: "0.25rem", color: s.score >= 80 ? "#22c55e" : s.score >= 60 ? "#f59e0b" : "var(--muted)" }}>{s.score}</td>
@@ -277,7 +317,7 @@ export default function BacktestResultPage() {
                 </tr>
               </thead>
               <tbody>
-                {signals.map((s: any, i: number) => (
+                {signals.map((s: Signal, i: number) => (
                   <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
                     <td style={{ padding: "0.25rem" }}>{s.symbol}</td>
                     <td style={{ padding: "0.25rem", color: s.direction === "buy" ? "#22c55e" : "#ef4444" }}>{s.direction === "buy" ? "买入" : "卖出"}</td>
@@ -296,13 +336,13 @@ export default function BacktestResultPage() {
         <div className="card" style={{ marginTop: "1rem" }}>
           <h3>绩效摘要</h3>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "1rem", marginTop: "0.75rem" }}>
-            <Metric label="总收益" value={`${(summary.total_return * 100).toFixed(2)}%`} color={summary.total_return >= 0 ? "#22c55e" : "#ef4444"} />
-            <Metric label="年化收益" value={`${(summary.annual_return * 100).toFixed(2)}%`} />
-            <Metric label="最大回撤" value={`${(summary.max_drawdown * 100).toFixed(2)}%`} color="#ef4444" />
+            <Metric label="总收益" value={`${((summary.total_return ?? 0) * 100).toFixed(2)}%`} color={(summary.total_return ?? 0) >= 0 ? "#22c55e" : "#ef4444"} />
+            <Metric label="年化收益" value={`${((summary.annual_return ?? 0) * 100).toFixed(2)}%`} />
+            <Metric label="最大回撤" value={`${((summary.max_drawdown ?? 0) * 100).toFixed(2)}%`} color="#ef4444" />
             <Metric label="夏普比率" value={summary.sharpe_ratio?.toFixed(2)} />
             <Metric label="索提诺比率" value={summary.sortino_ratio?.toFixed(2)} />
             <Metric label="Calmar比率" value={summary.calmar_ratio?.toFixed(2)} />
-            <Metric label="胜率" value={`${(summary.win_rate * 100).toFixed(1)}%`} />
+            <Metric label="胜率" value={`${((summary.win_rate ?? 0) * 100).toFixed(1)}%`} />
             <Metric label="总佣金" value={summary.total_commission?.toFixed(2)} />
           </div>
         </div>
@@ -327,22 +367,31 @@ export default function BacktestResultPage() {
         <div className="card" style={{ marginTop: "1rem" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
             <h3 style={{ margin: 0 }}>K 线与交易标记 ({tradeMarkers.length}笔)</h3>
-            {symbols.length > 1 && (
-              <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-                <span style={{ fontSize: "0.875rem", color: "var(--muted)" }}>标的:</span>
-                <select
-                  value={activeSymbol || symbols[0]}
-                  onChange={(e) => setActiveSymbol(e.target.value)}
-                  style={{ width: "auto", minWidth: 120 }}
-                >
-                  {symbols.map((s: string) => (
-                    <option key={s} value={s}>{s}</option>
-                  ))}
-                </select>
-              </div>
-            )}
+            <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+              {symbols.length > 1 && (
+                <>
+                  <span style={{ fontSize: "0.875rem", color: "var(--muted)" }}>标的:</span>
+                  <select
+                    value={activeSymbol || symbols[0]}
+                    onChange={(e) => setActiveSymbol(e.target.value)}
+                    style={{ width: "auto", minWidth: 120 }}
+                  >
+                    {symbols.map((s: string) => (
+                      <option key={s} value={s}>{s}</option>
+                    ))}
+                  </select>
+                </>
+              )}
+              <span style={{ fontSize: "0.875rem", color: "var(--muted)" }}>市场:</span>
+              <select value={exchange} onChange={(e) => setExchange(e.target.value)} style={{ width: "auto", minWidth: 80 }}>
+                <option value="cn">A股</option>
+                <option value="hk">港股</option>
+                <option value="us">美股</option>
+              </select>
+            </div>
           </div>
-          <KLineChart data={klineData} trades={tradeMarkers} />
+          <KLineChart data={klineData} trades={tradeMarkers} period={period} onPeriodChange={setPeriod} />
+          {klineError && <p style={{ color: "#ef4444", fontSize: "0.875rem", marginTop: "0.5rem" }} dangerouslySetInnerHTML={{ __html: escapeHtml(klineError) }} />}
         </div>
       )}
 
@@ -368,14 +417,14 @@ export default function BacktestResultPage() {
                 </tr>
               </thead>
               <tbody>
-                {tradesData.items.map((t: any, i: number) => (
+                {tradesData.items.map((t: Trade, i: number) => (
                   <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
                     <td style={{ padding: "0.25rem" }}>{t.timestamp?.slice(0, 10)}</td>
                     <td style={{ padding: "0.25rem" }}>{t.symbol}</td>
                     <td style={{ padding: "0.25rem", color: t.type === "buy" ? "#22c55e" : "#ef4444" }}>{t.type === "buy" ? "买入" : "卖出"}</td>
                     <td style={{ padding: "0.25rem" }}>{t.amount}</td>
                     <td style={{ padding: "0.25rem" }}>{t.price}</td>
-                    <td style={{ padding: "0.25rem", color: t.pnl >= 0 ? "#ef4444" : "#22c55e" }}>{t.pnl?.toFixed(2)}</td>
+                    <td style={{ padding: "0.25rem", color: (t.pnl ?? 0) >= 0 ? "#ef4444" : "#22c55e" }}>{(t.pnl ?? 0).toFixed(2)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -420,7 +469,7 @@ function Metric({ label, value, color }: { label: string; value: string | number
   );
 }
 
-function MonthlyHeatmap({ data }: { data: any[] }) {
+function MonthlyHeatmap({ data }: { data: MonthlyReturn[] }) {
   const byYear: Record<string, any[]> = {};
   data.forEach((d) => {
     const year = d.month.slice(0, 4);
