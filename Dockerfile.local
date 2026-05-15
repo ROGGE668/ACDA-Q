@@ -1,0 +1,31 @@
+# 直接使用本地编译的二进制文件
+FROM debian:bookworm-slim
+
+WORKDIR /app
+
+# 安装运行时依赖
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    libssl3 \
+    libpq5 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# 创建非 root 用户
+RUN useradd -m -u 1000 quant
+
+# 复制本地编译的二进制文件 (context 是项目根目录)
+COPY server-rust/target/release/acda-q-server /app/acda-q-server
+COPY server-rust/migrations /app/migrations
+
+# 创建报告目录
+RUN mkdir -p /app/reports && chown quant:quant /app/reports
+
+USER quant
+
+EXPOSE 8000
+
+ENV RUST_LOG=info
+ENV RUST_BACKTRACE=1
+
+CMD ["/app/acda-q-server"]
