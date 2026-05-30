@@ -132,6 +132,28 @@ useEffect(() => {
     setParams(found);
   };
 
+  // 将面板参数值同步回代码中的默认值
+  const syncCodeWithParams = (src: string, ps: ParamDef[]): string => {
+    let out = src;
+    for (const p of ps) {
+      const escapedName = p.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const pattern = new RegExp(
+        `(self\\.params\\.get\\(["']` + escapedName + `["']\\s*,\\s*)([^)]+)\\)`,
+        'g'
+      );
+      let newVal: string;
+      if (typeof p.default === "string") {
+        newVal = `\"${p.default}\"`;
+      } else if (typeof p.default === "boolean") {
+        newVal = p.default ? "True" : "False";
+      } else {
+        newVal = String(p.default);
+      }
+      out = out.replace(pattern, `$1${newVal})`);
+    }
+    return out;
+  };
+
   const codeOverLimit = code.length > MAX_CODE_LENGTH;
 
   const save = async () => {
@@ -144,11 +166,12 @@ useEffect(() => {
       return;
     }
     try {
+      const syncedCode = params.length > 0 ? syncCodeWithParams(code, params) : code;
       const saved = await saveStrategy({
         id,
         name,
         description,
-        code,
+        code: syncedCode,
         type: "single_stock",
         params: Object.fromEntries(params.map((p) => [p.name, p.default])),
       });
@@ -213,8 +236,9 @@ useEffect(() => {
     }
     setBacktesting(true);
     try {
+      const syncedCodeForBt = params.length > 0 ? syncCodeWithParams(code, params) : code;
       const backtestParams: BacktestParams = {
-        strategy_code: code,
+        strategy_code: syncedCodeForBt,
         symbols: fullMarketScan ? [] : selectedStocks,
         start_date: startDate,
         end_date: endDate,
