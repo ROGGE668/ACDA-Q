@@ -34,7 +34,7 @@ pub async fn scan_market(
     start_date: &str,
     end_date: &str,
     initial_cash: f64,
-) -> Result<Vec<ScanResultItem>, AppError> {
+) -> Result<(Vec<ScanResultItem>, usize), AppError> {
     info!("Starting market scan with user strategy, top_n={}", top_n);
 
     // 1. 如果传入了具体标的就用传入的，否则从 stock_basic 加载全部
@@ -111,7 +111,7 @@ pub async fn scan_market(
     results.truncate(top_n);
 
     info!("Scan complete: {} suitable stocks out of {} scanned", results.len(), total_scanned);
-    Ok(results)
+    Ok((results, total_scanned))
 }
 
 /// 直接调用 Python 进程执行批量扫描

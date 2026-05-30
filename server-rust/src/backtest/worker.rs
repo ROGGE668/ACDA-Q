@@ -345,7 +345,7 @@ impl Worker<BacktestPayload> for BacktestWorker {
                 .ok();
 
             let exchange = payload.params.get("exchange").and_then(|v| v.as_str()).unwrap_or("cn");
-            let results = scanner::scan_market(
+            let (results, total_scanned) = scanner::scan_market(
                 &self.db,
                 &self.ts_db,
                 &payload.code,
@@ -386,7 +386,7 @@ impl Worker<BacktestPayload> for BacktestWorker {
 
             let n = results.len().max(1) as u64;
             scan_summary = Some(json!({
-                "scanned_count": symbols.len(),
+                "scanned_count": total_scanned,
                 "suitable_count": results.len(),
                 "avg_return": results.iter().map(|r| r.total_return).sum::<Decimal>() / Decimal::from(n),
                 "avg_annual_return": results.iter().map(|r| r.annual_return).sum::<Decimal>() / Decimal::from(n),

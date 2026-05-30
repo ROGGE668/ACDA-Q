@@ -406,7 +406,7 @@ def bars_from_rows(rows):
 
 
 def _scan_one_stock(args):
-    """单只标的扫描（供并行调用）"""
+    """单只标的扫描（供线程池并行调用）"""
     symbol, bars_df, code, initial_cash, period, years = args
     try:
         if bars_df.empty or len(bars_df) < 20:
@@ -439,8 +439,9 @@ def _scan_one_stock(args):
 
 
 def handle_batch_scan(params):
-    """批量扫描：多进程并行执行策略，返回每只的绩效"""
+    """批量扫描：线程池并行执行策略，返回每只的绩效"""
     from datetime import datetime as _dt
+    import multiprocessing as _mp
     from concurrent.futures import ProcessPoolExecutor, as_completed
     import os
 
@@ -476,16 +477,21 @@ def handle_batch_scan(params):
     if all_bars.empty:
         return {"status": "success", "results": []}
 
-    # 准备每只标的的参数
+    # 预按标的分组，避免 worker 内重复过滤
+    symbol_groups = {}
+    if "symbol" in all_bars.columns:
+        for sym, grp in all_bars.groupby("symbol"):
+            symbol_groups[sym] = grp.copy()
     tasks = []
     for symbol in symbols:
-        bars = all_bars[all_bars["symbol"] == symbol] if "symbol" in all_bars.columns else pd.DataFrame()
+        bars = symbol_groups.get(symbol, pd.DataFrame())
         tasks.append((symbol, bars, code, initial_cash, period, years))
 
-    # 多进程并行执行（最多 CPU 核数 或 8 个进程）
+    # 多进程并行执行（spawn 模式避免 fork 兼容性问题）
     max_workers = min(os.cpu_count() or 4, 8)
+    ctx = _mp.get_context("spawn")
     results = []
-    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+    with ProcessPoolExecutor(max_workers=max_workers, mp_context=ctx) as executor:
         futures = {executor.submit(_scan_one_stock, t): t[0] for t in tasks}
         for future in as_completed(futures):
             r = future.result()
