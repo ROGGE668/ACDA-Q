@@ -232,7 +232,7 @@ impl Worker<BacktestPayload> for BacktestWorker {
         let (strategy_type, strategy_params) = parse_strategy_params(&payload.params);
 
         let symbols = payload.symbols.clone();
-        if symbols.is_empty() {
+        if symbols.is_empty() && payload.scope != "scan" {
             return Err("No symbols provided".to_string());
         }
 
