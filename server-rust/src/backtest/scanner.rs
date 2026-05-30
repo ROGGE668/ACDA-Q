@@ -47,7 +47,7 @@ pub async fn scan_market(
         (symbols_input.to_vec(), names)
     } else {
         let stocks: Vec<(String, String)> = sqlx::query_as(
-            "SELECT symbol, name FROM stock_basic WHERE is_active = TRUE ORDER BY symbol",
+            "SELECT symbol, name FROM stock_basic WHERE is_active = TRUE ORDER BY symbol LIMIT 200",
         )
         .fetch_all(ts_db)
         .await
