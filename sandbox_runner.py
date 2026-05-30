@@ -433,12 +433,30 @@ def handle_batch_scan(params):
             trades, equity_curve = execute_strategy(code, bars, initial_cash, period)
             perf = compute_performance(trades, initial_cash, equity_curve)
 
-            score = float(perf.get("sharpe_ratio", 0)) * 0.4                   + float(perf.get("total_return", 0)) * 0.4                   - abs(float(perf.get("max_drawdown", 0))) * 0.2
+            # 100-point scoring: sharpe 40% + return 40% + drawdown 20%%
+            raw_sharpe = float(perf.get("sharpe_ratio", 0))
+            raw_return = float(perf.get("total_return", 0))
+            raw_dd = abs(float(perf.get("max_drawdown", 0)))
+            sharpe_pts = max(0, min(100, (raw_sharpe + 2) / 7 * 100))
+            return_pts = max(0, min(100, (raw_return + 0.5) / 2.5 * 100))
+            dd_pts = max(0, min(100, (1 - raw_dd / 0.5) * 100))
+            score = sharpe_pts * 0.4 + return_pts * 0.4 + dd_pts * 0.2
+            # 计算年化收益
+            from datetime import datetime as _dt
+            try:
+                _s = _dt.strptime(start_date, "%Y-%m-%d")
+                _e = _dt.strptime(end_date, "%Y-%m-%d")
+                _years = max((_e - _s).days / 365.25, 0.01)
+                _total_ret = float(perf.get("total_return", 0))
+                _annual_ret = (1 + _total_ret) ** (1 / _years) - 1 if _total_ret > -1 else -1.0
+            except Exception:
+                _annual_ret = 0.0
 
             results.append({
                 "symbol": symbol,
                 "score": round(score, 4),
                 "total_return": round(float(perf.get("total_return", 0)), 6),
+                "annual_return": round(_annual_ret, 6),
                 "sharpe_ratio": round(float(perf.get("sharpe_ratio", 0)), 4),
                 "max_drawdown": round(float(perf.get("max_drawdown", 0)), 6),
                 "total_trades": int(perf.get("total_trades", 0)),

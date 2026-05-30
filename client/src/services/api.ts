@@ -239,6 +239,7 @@ export interface SuitableStock {
   name?: string;
   score: number;
   total_return: number;
+  annual_return?: number;
   max_drawdown: number;
   sharpe_ratio?: number;
   total_trades: number;

@@ -321,7 +321,7 @@ export default function BacktestResultPage() {
                     <td style={{ padding: "0.375rem 0.5rem" }}>{s.name || "-"}</td>
                     <td style={{ padding: "0.375rem 0.5rem", textAlign: "right", fontWeight: 600, color: Number(s.score) >= 80 ? "#22c55e" : Number(s.score) >= 60 ? "#f59e0b" : "var(--muted)" }}>{Number(s.score || 0).toFixed(1)}</td>
                     <td style={{ padding: "0.375rem 0.5rem", textAlign: "right", color: Number(s.total_return) >= 0 ? "#22c55e" : "#ef4444" }}>{(Number(s.total_return || 0) * 100).toFixed(2)}%</td>
-                    <td style={{ padding: "0.375rem 0.5rem", textAlign: "right" }}>{Number(s.sharpe_ratio || 0).toFixed(2)}</td>
+                    <td style={{ padding: "0.375rem 0.5rem", textAlign: "right", color: Number(s.annual_return ?? 0) >= 0 ? "#22c55e" : "#ef4444" }}>{(Number(s.annual_return ?? 0) * 100).toFixed(2)}%</td>
                     <td style={{ padding: "0.375rem 0.5rem", textAlign: "right", color: "#ef4444" }}>{(Number(s.max_drawdown || 0) * 100).toFixed(2)}%</td>
                     <td style={{ padding: "0.375rem 0.5rem", textAlign: "right" }}>{Number(s.sharpe_ratio || 0).toFixed(2)}</td>
                     <td style={{ padding: "0.375rem 0.5rem", textAlign: "right" }}>{Number(s.total_trades || 0)}</td>
