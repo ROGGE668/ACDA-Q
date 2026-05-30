@@ -404,7 +404,8 @@ def bars_from_rows(rows):
 
 
 def handle_batch_scan(params):
-    """批量扫描：对多只标的运行策略，返回每只的绩效"""
+    """批量扫描：对多只标的运行策略，返回每只的绩效（分块处理避免内存溢出）"""
+    from datetime import datetime as _dt
     code = params.get("code", "")
     symbols = params.get("symbols", [])
     start_date = params.get("start_date", "2024-01-01")
@@ -415,66 +416,65 @@ def handle_batch_scan(params):
     if not symbols or not code.strip():
         return {"status": "error", "error": "Missing symbols or code"}
 
-    results = []
-    # 批量加载所有标的的日线数据（一次DB查询）
+    # 计算年数用于年化
     try:
-        if period == "1d" or period == "":
-            all_bars = load_daily_bars(symbols, start_date, end_date)
-        else:
-            db_period = period.replace("min", "")
-            all_bars = load_minute_bars(symbols, start_date, end_date, db_period)
-            if all_bars.empty:
-                all_bars = load_daily_bars(symbols, start_date, end_date)
+        _s = _dt.strptime(start_date, "%Y-%m-%d")
+        _e = _dt.strptime(end_date, "%Y-%m-%d")
+        _years = max((_e - _s).days / 365.25, 0.01)
     except Exception:
-        all_bars = pd.DataFrame()
+        _years = 1.0
 
-    if all_bars.empty:
-        return {"status": "success", "results": []}
+    results = []
+    CHUNK = 500
 
-    for symbol in symbols:
+    for ci in range(0, len(symbols), CHUNK):
+        chunk = symbols[ci:ci + CHUNK]
         try:
-            bars = all_bars[all_bars["symbol"] == symbol] if "symbol" in all_bars.columns else pd.DataFrame()
-            if bars.empty or len(bars) < 20:
-                continue
-
-            trades, equity_curve = execute_strategy(code, bars, initial_cash, period)
-            perf = compute_performance(trades, initial_cash, equity_curve)
-
-            # 100-point scoring: sharpe 40% + return 40% + drawdown 20%%
-            raw_sharpe = float(perf.get("sharpe_ratio", 0))
-            raw_return = float(perf.get("total_return", 0))
-            raw_dd = abs(float(perf.get("max_drawdown", 0)))
-            sharpe_pts = max(0, min(100, (raw_sharpe + 2) / 7 * 100))
-            return_pts = max(0, min(100, (raw_return + 0.5) / 2.5 * 100))
-            dd_pts = max(0, min(100, (1 - raw_dd / 0.5) * 100))
-            score = sharpe_pts * 0.4 + return_pts * 0.4 + dd_pts * 0.2
-            # 计算年化收益
-            from datetime import datetime as _dt
-            try:
-                _s = _dt.strptime(start_date, "%Y-%m-%d")
-                _e = _dt.strptime(end_date, "%Y-%m-%d")
-                _years = max((_e - _s).days / 365.25, 0.01)
-                _total_ret = float(perf.get("total_return", 0))
-                _annual_ret = (1 + _total_ret) ** (1 / _years) - 1 if _total_ret > -1 else -1.0
-            except Exception:
-                _annual_ret = 0.0
-
-            results.append({
-                "symbol": symbol,
-                "score": round(score, 4),
-                "total_return": round(float(perf.get("total_return", 0)), 6),
-                "annual_return": round(_annual_ret, 6),
-                "sharpe_ratio": round(float(perf.get("sharpe_ratio", 0)), 4),
-                "max_drawdown": round(float(perf.get("max_drawdown", 0)), 6),
-                "total_trades": int(perf.get("total_trades", 0)),
-                "final_value": float(perf.get("final_value", 0)),
-            })
+            if period == "1d" or period == "":
+                chunk_bars = load_daily_bars(chunk, start_date, end_date)
+            else:
+                db_period = period.replace("min", "")
+                chunk_bars = load_minute_bars(chunk, start_date, end_date, db_period)
+                if chunk_bars.empty:
+                    chunk_bars = load_daily_bars(chunk, start_date, end_date)
         except Exception:
             continue
+        if chunk_bars.empty:
+            continue
 
-    # 按 score 降序排序
+        for symbol in chunk:
+            try:
+                bars = chunk_bars[chunk_bars["symbol"] == symbol] if "symbol" in chunk_bars.columns else pd.DataFrame()
+                if bars.empty or len(bars) < 20:
+                    continue
+                trades, equity_curve = execute_strategy(code, bars, initial_cash, period)
+                perf = compute_performance(trades, initial_cash, equity_curve)
+
+                raw_sharpe = float(perf.get("sharpe_ratio", 0))
+                raw_return = float(perf.get("total_return", 0))
+                raw_dd = abs(float(perf.get("max_drawdown", 0)))
+                sharpe_pts = max(0, min(100, (raw_sharpe + 2) / 7 * 100))
+                return_pts = max(0, min(100, (raw_return + 0.5) / 2.5 * 100))
+                dd_pts = max(0, min(100, (1 - raw_dd / 0.5) * 100))
+                score = sharpe_pts * 0.4 + return_pts * 0.4 + dd_pts * 0.2
+
+                _total_ret = float(perf.get("total_return", 0))
+                _annual_ret = (1 + _total_ret) ** (1 / _years) - 1 if _total_ret > -1 else -1.0
+
+                results.append({
+                    "symbol": symbol,
+                    "score": round(score, 4),
+                    "total_return": round(_total_ret, 6),
+                    "annual_return": round(_annual_ret, 6),
+                    "sharpe_ratio": round(raw_sharpe, 4),
+                    "max_drawdown": round(float(perf.get("max_drawdown", 0)), 6),
+                    "total_trades": int(perf.get("total_trades", 0)),
+                    "final_value": float(perf.get("final_value", 0)),
+                })
+            except Exception:
+                continue
+
     results.sort(key=lambda x: x["score"], reverse=True)
-
     return {"status": "success", "results": results}
 
 

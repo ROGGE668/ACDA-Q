@@ -344,11 +344,13 @@ impl Worker<BacktestPayload> for BacktestWorker {
                 .await
                 .ok();
 
+            let exchange = payload.params.get("exchange").and_then(|v| v.as_str()).unwrap_or("cn");
             let results = scanner::scan_market(
                 &self.db,
                 &self.ts_db,
                 &payload.code,
                 &symbols,
+                exchange,
                 top_n,
                 score_threshold,
                 &payload.start_date,

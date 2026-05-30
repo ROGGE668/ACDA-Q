@@ -26,6 +26,7 @@ pub async fn scan_market(
     ts_db: &PgPool,
     strategy_code: &str,
     symbols_input: &[String],
+    exchange: &str,
     top_n: usize,
     score_threshold: Decimal,
     start_date: &str,
@@ -46,12 +47,17 @@ pub async fn scan_market(
         .unwrap_or_default();
         (symbols_input.to_vec(), names)
     } else {
-        let stocks: Vec<(String, String)> = sqlx::query_as(
-            "SELECT symbol, name FROM stock_basic WHERE is_active = TRUE ORDER BY symbol LIMIT 200",
-        )
-        .fetch_all(ts_db)
-        .await
-        .map_err(|e| AppError::Database(e))?;
+        // 按市场过滤: cn=A股(6位数字), hk=港股(5位数字), us=美股(纯字母)
+        let (sql, filter_desc) = match exchange {
+            "hk" => ("SELECT symbol, name FROM stock_basic WHERE is_active = TRUE AND symbol ~ '^[0-9]{5}$' ORDER BY symbol", "港股"),
+            "us" => ("SELECT symbol, name FROM stock_basic WHERE is_active = TRUE AND symbol ~ '^[A-Z]+$' ORDER BY symbol", "美股"),
+            _    => ("SELECT symbol, name FROM stock_basic WHERE is_active = TRUE AND symbol ~ '^[0-9]{6}$' ORDER BY symbol", "A股"),
+        };
+        let stocks: Vec<(String, String)> = sqlx::query_as(sql)
+            .fetch_all(ts_db)
+            .await
+            .map_err(|e| AppError::Database(e))?;
+        info!("Market filter '{}': {} stocks found", filter_desc, stocks.len());
         let syms: Vec<String> = stocks.iter().map(|(s, _)| s.clone()).collect();
         let names: std::collections::HashMap<String, String> = stocks.into_iter().collect();
         (syms, names)

@@ -255,7 +255,8 @@ useEffect(() => {
         backtestParams.scope = "scan";
         backtestParams.params = {
           top_n: 50,
-          score_threshold: 60,
+          score_threshold: 0,
+          exchange: exchange,
           ...Object.fromEntries(params.map((p) => [p.name, p.default])),
         };
       } else {
