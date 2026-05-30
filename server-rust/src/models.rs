@@ -21,6 +21,7 @@ pub struct TokenPair {
 pub struct User {
     pub id: Uuid,
     pub email: String,
+    #[serde(skip_serializing)]
     pub password_hash: String,
     pub nickname: Option<String>,
     pub is_admin: bool,
@@ -99,13 +100,14 @@ pub struct BacktestJob {
     pub status: String, // pending/running/success/failed
     pub scope: Option<String>, // single/multi/scan
     pub symbols: Option<Vec<String>>,
-    pub start_date: Option<DateTime<Utc>>,
-    pub end_date: Option<DateTime<Utc>>,
+    pub start_date: Option<chrono::NaiveDate>,
+    pub end_date: Option<chrono::NaiveDate>,
     pub initial_cash: Decimal,
     pub params: Option<serde_json::Value>,
     pub result_summary: Option<serde_json::Value>,
     pub result_report_path: Option<String>,
     pub error_message: Option<String>,
+    pub period: Option<String>,
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
@@ -120,6 +122,7 @@ pub struct BacktestSubmit {
     pub end_date: Option<String>,
     pub initial_cash: Option<Decimal>,
     pub scope: Option<String>,
+    pub period: Option<String>,
     pub params: Option<serde_json::Value>,
 }
 
@@ -129,12 +132,13 @@ pub struct BacktestJobOut {
     pub status: String,
     pub scope: Option<String>,
     pub symbols: Option<Vec<String>>,
-    pub start_date: Option<DateTime<Utc>>,
-    pub end_date: Option<DateTime<Utc>>,
+    pub start_date: Option<chrono::NaiveDate>,
+    pub end_date: Option<chrono::NaiveDate>,
     pub initial_cash: Decimal,
     pub result_summary: Option<serde_json::Value>,
     pub result_report_path: Option<String>,
     pub error_message: Option<String>,
+    pub period: Option<String>,
     pub created_at: DateTime<Utc>,
     pub completed_at: Option<DateTime<Utc>>,
 }
@@ -254,6 +258,19 @@ pub struct DailyBar {
     pub amount: Option<Decimal>,
     pub pre_close: Option<Decimal>,
     pub change_pct: Option<Decimal>,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct MinuteBar {
+    pub symbol: String,
+    pub datetime: DateTime<Utc>,
+    pub open: Decimal,
+    pub high: Decimal,
+    pub low: Decimal,
+    pub close: Decimal,
+    pub volume: i64,
+    pub amount: Option<Decimal>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]

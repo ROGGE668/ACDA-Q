@@ -402,6 +402,58 @@ def bars_from_rows(rows):
         df["volume"] = pd.to_numeric(df["volume"], errors="coerce").fillna(0).astype(int)
     return df
 
+
+def handle_batch_scan(params):
+    """批量扫描：对多只标的运行策略，返回每只的绩效"""
+    code = params.get("code", "")
+    symbols = params.get("symbols", [])
+    start_date = params.get("start_date", "2024-01-01")
+    end_date = params.get("end_date", "2024-12-31")
+    initial_cash = params.get("initial_cash", 1000000.0)
+    period = params.get("period", "1d")
+
+    if not symbols or not code.strip():
+        return {"status": "error", "error": "Missing symbols or code"}
+
+    results = []
+    # 预加载所有标的的数据
+    for symbol in symbols:
+        try:
+            if period == "1d" or period == "":
+                bars = load_daily_bars([symbol], start_date, end_date)
+            else:
+                db_period = period.replace("min", "")
+                bars = load_minute_bars([symbol], start_date, end_date, db_period)
+                if bars.empty:
+                    bars = load_daily_bars([symbol], start_date, end_date)
+
+            if bars.empty or len(bars) < 20:
+                continue
+
+            trades, equity_curve = execute_strategy(code, bars, initial_cash, period)
+            perf = compute_performance(trades, initial_cash, equity_curve)
+
+            score = float(perf.get("sharpe_ratio", 0)) * 0.4                   + float(perf.get("total_return", 0)) * 0.4                   - abs(float(perf.get("max_drawdown", 0))) * 0.2
+
+            results.append({
+                "symbol": symbol,
+                "score": round(score, 4),
+                "total_return": round(float(perf.get("total_return", 0)), 6),
+                "sharpe_ratio": round(float(perf.get("sharpe_ratio", 0)), 4),
+                "max_drawdown": round(float(perf.get("max_drawdown", 0)), 6),
+                "total_trades": int(perf.get("total_trades", 0)),
+                "final_value": float(perf.get("final_value", 0)),
+            })
+        except Exception as e:
+            # 跳过执行失败的标的
+            continue
+
+    # 按 score 降序排序
+    results.sort(key=lambda x: x["score"], reverse=True)
+
+    return {"status": "success", "results": results}
+
+
 def handle_request(params):
     """处理单个回测请求，返回结果 dict"""
     code = params.get("code", "")
@@ -470,7 +522,10 @@ def main():
             print(json.dumps(result), flush=True)
             continue
 
-        result = handle_request(params)
+        if params.get("action") == "batch_scan":
+            result = handle_batch_scan(params)
+        else:
+            result = handle_request(params)
         print(json.dumps(result), flush=True)
 
 

@@ -236,11 +236,13 @@ export interface Signal {
 
 export interface SuitableStock {
   symbol: string;
+  name?: string;
   score: number;
   total_return: number;
   max_drawdown: number;
   sharpe_ratio?: number;
   total_trades: number;
+  final_value?: number;
 }
 
 export interface KLineData {

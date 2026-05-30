@@ -322,6 +322,7 @@ impl Worker<BacktestPayload> for BacktestWorker {
         let mut scan_trades: Option<Vec<serde_json::Value>> = None;
         let mut equity_snapshots: Vec<AccountSnapshot> = vec![];
         let mut sandbox_kline: Vec<serde_json::Value> = vec![];
+        let mut scan_summary: Option<serde_json::Value> = None;
         let (perf, scan_results) = if payload.scope == "scan" {
             // Scan 模式：全市场扫描
             let top_n = payload
@@ -346,10 +347,12 @@ impl Worker<BacktestPayload> for BacktestWorker {
             let results = scanner::scan_market(
                 &self.db,
                 &self.ts_db,
+                &payload.code,
                 top_n,
                 score_threshold,
                 &payload.start_date,
                 &payload.end_date,
+                initial_cash.to_string().parse().unwrap_or(1_000_000.0),
             )
             .await
             .map_err(|e| format!("Scan failed: {}", e))?;
@@ -378,6 +381,14 @@ impl Worker<BacktestPayload> for BacktestWorker {
                 monthly_returns: Vec::new(),
             };
 
+            scan_summary = Some(json!({
+                "scanned_count": results.len(),
+                "suitable_count": results.len(),
+                "avg_return": results.iter().map(|r| r.total_return).sum::<Decimal>() / Decimal::from(results.len().max(1) as u64),
+                "avg_sharpe": results.iter().map(|r| r.sharpe_ratio).sum::<Decimal>() / Decimal::from(results.len().max(1) as u64),
+                "avg_drawdown": results.iter().map(|r| r.max_drawdown).sum::<Decimal>() / Decimal::from(results.len().max(1) as u64),
+                "total_trades": results.iter().map(|r| r.total_trades).sum::<u64>(),
+            }));
             (perf, Some(results))
         } else if is_builtin_strategy(&strategy_type) && payload.code.trim().is_empty() {
             // 内置策略：在当前进程执行（Rust 原生，仅当无自定义代码时）
@@ -418,7 +429,7 @@ impl Worker<BacktestPayload> for BacktestWorker {
             let report = json!({
                 "scope": "scan",
                 "suitable_count": results.len(),
-                "results": results,
+                "suitable_stocks": results,
             });
             save_json_report(&job_id_str, &report)
                 .map_err(|e| format!("Failed to save scan report: {}", e))?
@@ -535,7 +546,7 @@ impl Worker<BacktestPayload> for BacktestWorker {
         // Decimal → f64 后再序列化，确保前端能直接调用 .toFixed()
         use rust_decimal::prelude::ToPrimitive;
         fn d2f(d: &Decimal) -> f64 { ToPrimitive::to_f64(d).unwrap_or(0.0) }
-        let summary = json!({
+        let base_summary = json!({
             "total_return": d2f(&perf.total_return),
             "annual_return": d2f(&perf.annual_return),
             "max_drawdown": d2f(&perf.max_drawdown),
@@ -550,6 +561,15 @@ impl Worker<BacktestPayload> for BacktestWorker {
             "duration_days": perf.duration_days,
             "trading_days": perf.trading_days,
         });
+        let summary = if let Some(ref ss) = scan_summary {
+            let mut merged = base_summary.as_object().unwrap().clone();
+            if let Some(ss_obj) = ss.as_object() {
+                for (k, v) in ss_obj { merged.insert(k.clone(), v.clone()); }
+            }
+            serde_json::Value::Object(merged)
+        } else {
+            base_summary
+        };
 
         sqlx::query(
             "UPDATE backtest_jobs SET status = 'success', result_summary = $1, result_report_path = $2, period = $3, completed_at = NOW() WHERE id = $4"

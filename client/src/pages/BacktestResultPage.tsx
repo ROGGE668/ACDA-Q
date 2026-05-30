@@ -292,28 +292,39 @@ export default function BacktestResultPage() {
 
       {isScan && suitableStocks.length > 0 && (
         <div className="card" style={{ marginTop: "1rem" }}>
-          <h3>适合策略的股票 (评分≥60)</h3>
-          <div style={{ maxHeight: 300, overflow: "auto", marginTop: "0.5rem" }}>
-            <table style={{ width: "100%", fontSize: "0.875rem", borderCollapse: "collapse" }}>
-              <thead>
-                <tr style={{ borderBottom: "1px solid var(--border)", textAlign: "left" }}>
-                  <th style={{ padding: "0.25rem" }}>标的</th>
-                  <th style={{ padding: "0.25rem" }}>评分</th>
-                  <th style={{ padding: "0.25rem" }}>总收益</th>
-                  <th style={{ padding: "0.25rem" }}>最大回撤</th>
-                  <th style={{ padding: "0.25rem" }}>夏普</th>
-                  <th style={{ padding: "0.25rem" }}>交易次数</th>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
+            <h3 style={{ margin: 0 }}>扫描结果 Top {suitableStocks.length}</h3>
+            <span style={{ fontSize: "0.75rem", color: "var(--muted)" }}>
+              按综合评分排序 | 评分 = 夏普×0.4 + 收益×0.4 − 回撤×0.2
+            </span>
+          </div>
+          <div style={{ maxHeight: 500, overflow: "auto" }}>
+            <table style={{ width: "100%", fontSize: "0.8125rem", borderCollapse: "collapse" }}>
+              <thead style={{ position: "sticky", top: 0, background: "var(--bg, #1a1a2e)" }}>
+                <tr style={{ borderBottom: "2px solid var(--border)", textAlign: "left" }}>
+                  <th style={{ padding: "0.375rem 0.5rem", width: 40 }}>#</th>
+                  <th style={{ padding: "0.375rem 0.5rem" }}>代码</th>
+                  <th style={{ padding: "0.375rem 0.5rem" }}>名称</th>
+                  <th style={{ padding: "0.375rem 0.5rem", textAlign: "right" }}>评分</th>
+                  <th style={{ padding: "0.375rem 0.5rem", textAlign: "right" }}>总收益</th>
+                  <th style={{ padding: "0.375rem 0.5rem", textAlign: "right" }}>年化</th>
+                  <th style={{ padding: "0.375rem 0.5rem", textAlign: "right" }}>最大回撤</th>
+                  <th style={{ padding: "0.375rem 0.5rem", textAlign: "right" }}>夏普</th>
+                  <th style={{ padding: "0.375rem 0.5rem", textAlign: "right" }}>交易次数</th>
                 </tr>
               </thead>
               <tbody>
                 {suitableStocks.map((s: SuitableStock, i: number) => (
-                  <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
-                    <td style={{ padding: "0.25rem" }}>{s.symbol}</td>
-                    <td style={{ padding: "0.25rem", color: s.score >= 80 ? "#22c55e" : s.score >= 60 ? "#f59e0b" : "var(--muted)" }}>{s.score}</td>
-                    <td style={{ padding: "0.25rem" }}>{(s.total_return * 100).toFixed(2)}%</td>
-                    <td style={{ padding: "0.25rem" }}>{(s.max_drawdown * 100).toFixed(2)}%</td>
-                    <td style={{ padding: "0.25rem" }}>{s.sharpe_ratio?.toFixed(2)}</td>
-                    <td style={{ padding: "0.25rem" }}>{s.total_trades}</td>
+                  <tr key={i} style={{ borderBottom: "1px solid var(--border)", background: i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.02)" }}>
+                    <td style={{ padding: "0.375rem 0.5rem", color: "var(--muted)" }}>{i + 1}</td>
+                    <td style={{ padding: "0.375rem 0.5rem", fontFamily: "monospace" }}>{s.symbol}</td>
+                    <td style={{ padding: "0.375rem 0.5rem" }}>{s.name || "-"}</td>
+                    <td style={{ padding: "0.375rem 0.5rem", textAlign: "right", fontWeight: 600, color: s.score >= 80 ? "#22c55e" : s.score >= 60 ? "#f59e0b" : "var(--muted)" }}>{s.score?.toFixed(1)}</td>
+                    <td style={{ padding: "0.375rem 0.5rem", textAlign: "right", color: s.total_return >= 0 ? "#22c55e" : "#ef4444" }}>{(s.total_return * 100).toFixed(2)}%</td>
+                    <td style={{ padding: "0.375rem 0.5rem", textAlign: "right" }}>{s.sharpe_ratio?.toFixed(2) || "-"}</td>
+                    <td style={{ padding: "0.375rem 0.5rem", textAlign: "right", color: "#ef4444" }}>{(s.max_drawdown * 100).toFixed(2)}%</td>
+                    <td style={{ padding: "0.375rem 0.5rem", textAlign: "right" }}>{s.sharpe_ratio?.toFixed(2) || "-"}</td>
+                    <td style={{ padding: "0.375rem 0.5rem", textAlign: "right" }}>{s.total_trades}</td>
                   </tr>
                 ))}
               </tbody>
