@@ -416,17 +416,24 @@ def handle_batch_scan(params):
         return {"status": "error", "error": "Missing symbols or code"}
 
     results = []
-    # 预加载所有标的的数据
+    # 批量加载所有标的的日线数据（一次DB查询）
+    try:
+        if period == "1d" or period == "":
+            all_bars = load_daily_bars(symbols, start_date, end_date)
+        else:
+            db_period = period.replace("min", "")
+            all_bars = load_minute_bars(symbols, start_date, end_date, db_period)
+            if all_bars.empty:
+                all_bars = load_daily_bars(symbols, start_date, end_date)
+    except Exception:
+        all_bars = pd.DataFrame()
+
+    if all_bars.empty:
+        return {"status": "success", "results": []}
+
     for symbol in symbols:
         try:
-            if period == "1d" or period == "":
-                bars = load_daily_bars([symbol], start_date, end_date)
-            else:
-                db_period = period.replace("min", "")
-                bars = load_minute_bars([symbol], start_date, end_date, db_period)
-                if bars.empty:
-                    bars = load_daily_bars([symbol], start_date, end_date)
-
+            bars = all_bars[all_bars["symbol"] == symbol] if "symbol" in all_bars.columns else pd.DataFrame()
             if bars.empty or len(bars) < 20:
                 continue
 
@@ -462,8 +469,7 @@ def handle_batch_scan(params):
                 "total_trades": int(perf.get("total_trades", 0)),
                 "final_value": float(perf.get("final_value", 0)),
             })
-        except Exception as e:
-            # 跳过执行失败的标的
+        except Exception:
             continue
 
     # 按 score 降序排序

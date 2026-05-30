@@ -25,6 +25,7 @@ pub async fn scan_market(
     _db: &PgPool,
     ts_db: &PgPool,
     strategy_code: &str,
+    symbols_input: &[String],
     top_n: usize,
     score_threshold: Decimal,
     start_date: &str,
@@ -33,17 +34,28 @@ pub async fn scan_market(
 ) -> Result<Vec<ScanResultItem>, AppError> {
     info!("Starting market scan with user strategy, top_n={}", top_n);
 
-    // 1. 从 stock_basic 加载活跃标的
-    let stocks: Vec<(String, String)> = sqlx::query_as(
-        "SELECT symbol, name FROM stock_basic WHERE is_active = TRUE ORDER BY symbol",
-    )
-    .fetch_all(ts_db)
-    .await
-    .map_err(|e| AppError::Database(e))?;
-
-    let symbols: Vec<String> = stocks.iter().map(|(s, _)| s.clone()).collect();
-    let name_map: std::collections::HashMap<String, String> =
-        stocks.into_iter().collect();
+    // 1. 如果传入了具体标的就用传入的，否则从 stock_basic 加载全部
+    let (symbols, name_map) = if !symbols_input.is_empty() {
+        let names: std::collections::HashMap<String, String> = sqlx::query_as::<_, (String, String)>(
+            "SELECT symbol, name FROM stock_basic WHERE symbol = ANY($1)",
+        )
+        .bind(symbols_input)
+        .fetch_all(ts_db)
+        .await
+        .map(|rows| rows.into_iter().collect())
+        .unwrap_or_default();
+        (symbols_input.to_vec(), names)
+    } else {
+        let stocks: Vec<(String, String)> = sqlx::query_as(
+            "SELECT symbol, name FROM stock_basic WHERE is_active = TRUE ORDER BY symbol",
+        )
+        .fetch_all(ts_db)
+        .await
+        .map_err(|e| AppError::Database(e))?;
+        let syms: Vec<String> = stocks.iter().map(|(s, _)| s.clone()).collect();
+        let names: std::collections::HashMap<String, String> = stocks.into_iter().collect();
+        (syms, names)
+    };
 
     info!("Scan: {} active stocks, calling Python batch sandbox", symbols.len());
 

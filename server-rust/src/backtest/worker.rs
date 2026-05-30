@@ -348,6 +348,7 @@ impl Worker<BacktestPayload> for BacktestWorker {
                 &self.db,
                 &self.ts_db,
                 &payload.code,
+                &symbols,
                 top_n,
                 score_threshold,
                 &payload.start_date,
