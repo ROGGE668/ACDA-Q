@@ -16,6 +16,14 @@ export default function BacktestResultPage() {
   const [period, setPeriod] = useState("1d");
   const [exchange, setExchange] = useState<string>("cn");
 
+  // Scan filter state
+  const [fScore, setFScore] = useState("");
+  const [fReturn, setFReturn] = useState("");
+  const [fAnnual, setFAnnual] = useState("");
+  const [fDrawdown, setFDrawdown] = useState("");
+  const [fSharpe, setFSharpe] = useState("");
+  const [fTrades, setFTrades] = useState("");
+
   // WebSocket ref
   const wsRef = useRef<WebSocket | null>(null);
   const fallbackPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -213,6 +221,23 @@ export default function BacktestResultPage() {
   const signals = result?.signals || [];
   const suitableStocks = result?.suitable_stocks || [];
 
+  // Filtered scan results
+  const filteredStocks = (suitableStocks as SuitableStock[]).filter((s: SuitableStock) => {
+    const score = Number(s.score || 0);
+    const ret = Number(s.total_return || 0) * 100;
+    const annual = Number(s.annual_return ?? 0) * 100;
+    const dd = Number(s.max_drawdown || 0) * 100;
+    const sharpe = Number(s.sharpe_ratio || 0);
+    const trades = Number(s.total_trades || 0);
+    if (fScore && score < Number(fScore)) return false;
+    if (fReturn && ret < Number(fReturn)) return false;
+    if (fAnnual && annual < Number(fAnnual)) return false;
+    if (fDrawdown && dd > Number(fDrawdown)) return false;
+    if (fSharpe && sharpe < Number(fSharpe)) return false;
+    if (fTrades && trades < Number(fTrades)) return false;
+    return true;
+  });
+
   // Trade markers for K-line
   const allTrades = (result?.trades || []).map((t: any) => ({
     ...t,
@@ -293,14 +318,14 @@ export default function BacktestResultPage() {
       {isScan && suitableStocks.length > 0 && (
         <div className="card" style={{ marginTop: "1rem" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
-            <h3 style={{ margin: 0 }}>扫描结果 Top {suitableStocks.length}</h3>
+            <h3 style={{ margin: 0 }}>扫描结果 {filteredStocks.length}/{suitableStocks.length}</h3>
             <span style={{ fontSize: "0.75rem", color: "var(--muted)" }}>
               按综合评分排序 | 评分 = 夏普×0.4 + 收益×0.4 − 回撤×0.2
             </span>
           </div>
           <div style={{ maxHeight: 500, overflow: "auto" }}>
             <table style={{ width: "100%", fontSize: "0.8125rem", borderCollapse: "collapse" }}>
-              <thead style={{ position: "sticky", top: 0, background: "var(--bg, #1a1a2e)" }}>
+              <thead style={{ position: "sticky", top: 0, background: "var(--bg, #1a1a2e)", zIndex: 1 }}>
                 <tr style={{ borderBottom: "2px solid var(--border)", textAlign: "left" }}>
                   <th style={{ padding: "0.375rem 0.5rem", width: 40 }}>#</th>
                   <th style={{ padding: "0.375rem 0.5rem" }}>代码</th>
@@ -312,9 +337,20 @@ export default function BacktestResultPage() {
                   <th style={{ padding: "0.375rem 0.5rem", textAlign: "right" }}>夏普</th>
                   <th style={{ padding: "0.375rem 0.5rem", textAlign: "right" }}>交易次数</th>
                 </tr>
+                <tr style={{ borderBottom: "1px solid var(--border)", fontSize: "0.75rem" }}>
+                  <th style={{ padding: "0.25rem 0.5rem" }}></th>
+                  <th style={{ padding: "0.25rem 0.5rem" }}></th>
+                  <th style={{ padding: "0.25rem 0.5rem" }}></th>
+                  <th style={{ padding: "0.25rem 0.25rem" }}><input type="number" placeholder="≥" value={fScore} onChange={e => setFScore(e.target.value)} style={{ width: 52, fontSize: "0.75rem", padding: "2px 4px" }} /></th>
+                  <th style={{ padding: "0.25rem 0.25rem" }}><input type="number" placeholder="≥%" value={fReturn} onChange={e => setFReturn(e.target.value)} style={{ width: 58, fontSize: "0.75rem", padding: "2px 4px" }} /></th>
+                  <th style={{ padding: "0.25rem 0.25rem" }}><input type="number" placeholder="≥%" value={fAnnual} onChange={e => setFAnnual(e.target.value)} style={{ width: 58, fontSize: "0.75rem", padding: "2px 4px" }} /></th>
+                  <th style={{ padding: "0.25rem 0.25rem" }}><input type="number" placeholder="≤%" value={fDrawdown} onChange={e => setFDrawdown(e.target.value)} style={{ width: 58, fontSize: "0.75rem", padding: "2px 4px" }} /></th>
+                  <th style={{ padding: "0.25rem 0.25rem" }}><input type="number" placeholder="≥" value={fSharpe} onChange={e => setFSharpe(e.target.value)} style={{ width: 52, fontSize: "0.75rem", padding: "2px 4px" }} /></th>
+                  <th style={{ padding: "0.25rem 0.25rem" }}><input type="number" placeholder="≥" value={fTrades} onChange={e => setFTrades(e.target.value)} style={{ width: 52, fontSize: "0.75rem", padding: "2px 4px" }} /></th>
+                </tr>
               </thead>
               <tbody>
-                {suitableStocks.map((s: SuitableStock, i: number) => (
+                {filteredStocks.map((s: SuitableStock, i: number) => (
                   <tr key={i} style={{ borderBottom: "1px solid var(--border)", background: i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.02)" }}>
                     <td style={{ padding: "0.375rem 0.5rem", color: "var(--muted)" }}>{i + 1}</td>
                     <td style={{ padding: "0.375rem 0.5rem", fontFamily: "monospace" }}>{s.symbol}</td>
