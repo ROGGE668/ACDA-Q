@@ -278,10 +278,10 @@ export default function BacktestResultPage() {
         <div className="card" style={{ marginTop: "1rem" }}>
           <h3>扫描整体表现</h3>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "1rem", marginTop: "0.75rem" }}>
-            <Metric label="平均收益" value={`${((summary.avg_return ?? 0) * 100).toFixed(2)}%`} color={(summary.avg_return ?? 0) >= 0 ? "#22c55e" : "#ef4444"} />
-            <Metric label="中位数收益" value={`${((summary.median_return ?? 0) * 100).toFixed(2)}%`} />
-            <Metric label="平均夏普" value={summary.avg_sharpe?.toFixed(2)} />
-            <Metric label="平均回撤" value={`${((summary.avg_drawdown ?? 0) * 100).toFixed(2)}%`} color="#ef4444" />
+            <Metric label="平均收益" value={`${(Number(summary.avg_return ?? 0) * 100).toFixed(2)}%`} color={Number(summary.avg_return ?? 0) >= 0 ? "#22c55e" : "#ef4444"} />
+            <Metric label="中位数收益" value={`${(Number(summary.median_return ?? 0) * 100).toFixed(2)}%`} />
+            <Metric label="平均夏普" value={Number(summary.avg_sharpe ?? 0).toFixed(2)} />
+            <Metric label="平均回撤" value={`${(Number(summary.avg_drawdown ?? 0) * 100).toFixed(2)}%`} color="#ef4444" />
             <Metric label="信号总数" value={summary.total_signals} />
             <Metric label="扫描标的数" value={summary.scanned_count} />
             <Metric label="胜率" value={`${((summary.win_rate ?? 0) * 100).toFixed(1)}%`} />
@@ -319,12 +319,12 @@ export default function BacktestResultPage() {
                     <td style={{ padding: "0.375rem 0.5rem", color: "var(--muted)" }}>{i + 1}</td>
                     <td style={{ padding: "0.375rem 0.5rem", fontFamily: "monospace" }}>{s.symbol}</td>
                     <td style={{ padding: "0.375rem 0.5rem" }}>{s.name || "-"}</td>
-                    <td style={{ padding: "0.375rem 0.5rem", textAlign: "right", fontWeight: 600, color: s.score >= 80 ? "#22c55e" : s.score >= 60 ? "#f59e0b" : "var(--muted)" }}>{s.score?.toFixed(1)}</td>
-                    <td style={{ padding: "0.375rem 0.5rem", textAlign: "right", color: s.total_return >= 0 ? "#22c55e" : "#ef4444" }}>{(s.total_return * 100).toFixed(2)}%</td>
-                    <td style={{ padding: "0.375rem 0.5rem", textAlign: "right" }}>{s.sharpe_ratio?.toFixed(2) || "-"}</td>
-                    <td style={{ padding: "0.375rem 0.5rem", textAlign: "right", color: "#ef4444" }}>{(s.max_drawdown * 100).toFixed(2)}%</td>
-                    <td style={{ padding: "0.375rem 0.5rem", textAlign: "right" }}>{s.sharpe_ratio?.toFixed(2) || "-"}</td>
-                    <td style={{ padding: "0.375rem 0.5rem", textAlign: "right" }}>{s.total_trades}</td>
+                    <td style={{ padding: "0.375rem 0.5rem", textAlign: "right", fontWeight: 600, color: Number(s.score) >= 80 ? "#22c55e" : Number(s.score) >= 60 ? "#f59e0b" : "var(--muted)" }}>{Number(s.score || 0).toFixed(1)}</td>
+                    <td style={{ padding: "0.375rem 0.5rem", textAlign: "right", color: Number(s.total_return) >= 0 ? "#22c55e" : "#ef4444" }}>{(Number(s.total_return || 0) * 100).toFixed(2)}%</td>
+                    <td style={{ padding: "0.375rem 0.5rem", textAlign: "right" }}>{Number(s.sharpe_ratio || 0).toFixed(2)}</td>
+                    <td style={{ padding: "0.375rem 0.5rem", textAlign: "right", color: "#ef4444" }}>{(Number(s.max_drawdown || 0) * 100).toFixed(2)}%</td>
+                    <td style={{ padding: "0.375rem 0.5rem", textAlign: "right" }}>{Number(s.sharpe_ratio || 0).toFixed(2)}</td>
+                    <td style={{ padding: "0.375rem 0.5rem", textAlign: "right" }}>{Number(s.total_trades || 0)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -367,13 +367,13 @@ export default function BacktestResultPage() {
         <div className="card" style={{ marginTop: "1rem" }}>
           <h3>绩效摘要</h3>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "1rem", marginTop: "0.75rem" }}>
-            <Metric label="总收益" value={`${((summary.total_return ?? 0) * 100).toFixed(2)}%`} color={(summary.total_return ?? 0) >= 0 ? "#22c55e" : "#ef4444"} />
-            <Metric label="年化收益" value={`${((summary.annual_return ?? 0) * 100).toFixed(2)}%`} />
-            <Metric label="最大回撤" value={`${((summary.max_drawdown ?? 0) * 100).toFixed(2)}%`} color="#ef4444" />
-            <Metric label="夏普比率" value={summary.sharpe_ratio?.toFixed(2)} />
-            <Metric label="索提诺比率" value={summary.sortino_ratio?.toFixed(2)} />
-            <Metric label="Calmar比率" value={summary.calmar_ratio?.toFixed(2)} />
-            <Metric label="胜率" value={`${((summary.win_rate ?? 0) * 100).toFixed(1)}%`} />
+            <Metric label="总收益" value={`${(Number(summary.total_return ?? 0) * 100).toFixed(2)}%`} color={Number(summary.total_return ?? 0) >= 0 ? "#22c55e" : "#ef4444"} />
+            <Metric label="年化收益" value={`${(Number(summary.annual_return ?? 0) * 100).toFixed(2)}%`} />
+            <Metric label="最大回撤" value={`${(Number(summary.max_drawdown ?? 0) * 100).toFixed(2)}%`} color="#ef4444" />
+            <Metric label="夏普比率" value={Number(summary.sharpe_ratio ?? 0).toFixed(2)} />
+            <Metric label="索提诺比率" value={Number(summary.sortino_ratio ?? 0).toFixed(2)} />
+            <Metric label="Calmar比率" value={Number(summary.calmar_ratio ?? 0).toFixed(2)} />
+            <Metric label="胜率" value={`${(Number(summary.win_rate ?? 0) * 100).toFixed(1)}%`} />
             <Metric label="总佣金" value={summary.total_commission?.toFixed(2)} />
           </div>
         </div>
