@@ -6,6 +6,9 @@ use axum::{
     Router,
 };
 use std::sync::Arc;
+use std::collections::HashMap;
+use std::time::Instant;
+use tokio::sync::RwLock;
 
 use crate::db::DbPool;
 use crate::metrics::{metrics_handler, Metrics};
@@ -24,6 +27,9 @@ mod admin;
 mod ai;
 mod health;
 
+/// 图表数据缓存：key = "{job_id}:{agg}", value = (创建时间, 缓存的JSON响应)
+pub type ChartCache = Arc<RwLock<HashMap<String, (Instant, serde_json::Value)>>>;
+
 #[derive(Clone)]
 pub struct AppState {
     pub db: DbPool,
@@ -35,6 +41,7 @@ pub struct AppState {
     #[allow(dead_code)]
     pub ws_manager: WsManager,
     pub queue: Arc<Queue>,
+    pub chart_cache: ChartCache,
 }
 
 /// 构建所有路由
@@ -45,19 +52,20 @@ pub fn create_router(state: AppState) -> Router {
         db: state.db.clone(),
         settings: state.settings.clone(),
     });
+    let ai_rl_state = Arc::new(RateLimitState::new(
+        state.settings.redis_url.clone(),
+        RateLimitConfig::ai(),
+    ));
 
-    let backtest_rl_state = Arc::new(RateLimitState {
-        redis_url: state.settings.redis_url.clone(),
-        config: RateLimitConfig::backtest(),
-    });
-    let ai_rl_state = Arc::new(RateLimitState {
-        redis_url: state.settings.redis_url.clone(),
-        config: RateLimitConfig::ai(),
-    });
-    let auth_rl_state = Arc::new(RateLimitState {
-        redis_url: state.settings.redis_url.clone(),
-        config: RateLimitConfig::auth(),
-    });
+    let auth_rl_state = Arc::new(RateLimitState::new(
+        state.settings.redis_url.clone(),
+        RateLimitConfig::auth(),
+    ));
+
+    let admin_rl_state = Arc::new(RateLimitState::new(
+        state.settings.redis_url.clone(),
+        RateLimitConfig::admin(),
+    ));
 
     let auth_public = Router::new()
         .route("/register", post(auth::register))
@@ -84,7 +92,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/:job_id/chart", get(backtest::get_backtest_chart))
         .route("/:job_id/trades", get(backtest::get_backtest_trades))
         .route("/:job_id/ws", get(crate::websocket::ws_backtest_handler))
-        .route_layer(middleware::from_fn_with_state(backtest_rl_state, rate_limit_middleware));
+        .route("/:job_id", delete(backtest::delete_backtest));
 
     let market_routes = Router::new()
         .route("/stocks", get(market::list_stocks))
@@ -101,6 +109,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/devices/heartbeat", post(subscription::device_heartbeat))
         .route("/devices", get(subscription::list_devices))
         .route("/devices/:id/revoke", post(subscription::revoke_device))
+        .route("/devices/:id", delete(subscription::delete_device))
         .route("/payments", post(subscription::create_payment).get(subscription::get_payments))
         .route("/payments/:order_no", get(subscription::get_payment_status))
         .route("/payments/:order_no/cancel", post(subscription::cancel_payment));
@@ -120,6 +129,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/backtests/:id", delete(admin::delete_backtest_job))
         .route("/sync/stock-list", post(admin::sync_stock_list))
         .route("/sync/daily-bars", post(admin::sync_daily_bars))
+        .layer(middleware::from_fn_with_state(admin_rl_state, rate_limit_middleware))
         .layer(middleware::from_fn(require_admin));
 
     let protected = Router::new()

@@ -4,6 +4,8 @@ use config::{Config, ConfigError, Environment, File};
 use rust_decimal::Decimal;
 use serde::Deserialize;
 
+use crate::crypto;
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Settings {
     #[allow(dead_code)]
@@ -78,8 +80,13 @@ impl Settings {
             .set_default("backtest_risk_free_rate", "0.02")?
             .build()?;
 
-        let settings: Settings = s.try_deserialize()?;
+        let mut settings: Settings = s.try_deserialize()?;
         settings.validate()?;
+
+        // 自动解密 ENC: 前缀的敏感配置值
+        settings.deepseek_api_key = crypto::decrypt(&settings.deepseek_api_key, &settings.secret_key);
+        settings.tushare_token = crypto::decrypt(&settings.tushare_token, &settings.secret_key);
+
         Ok(settings)
     }
 
@@ -103,6 +110,22 @@ impl Settings {
         if self.redis_url.is_empty() {
             return Err(ConfigError::Message(
                 "REDIS_URL must be set".to_string(),
+            ));
+        }
+        if self.sync_database_url.is_empty() {
+            return Err(ConfigError::Message(
+                "SYNC_DATABASE_URL must be set".to_string(),
+            ));
+        }
+        if self.timescale_database_url.is_empty() {
+            return Err(ConfigError::Message(
+                "TIMESCALE_DATABASE_URL must be set".to_string(),
+            ));
+        }
+        // 生产环境不允许 CORS 通配符
+        if !self.debug && self.cors_origins == "*" {
+            return Err(ConfigError::Message(
+                "CORS_ORIGINS must not be '*' in production (debug=false)".to_string(),
             ));
         }
         Ok(())

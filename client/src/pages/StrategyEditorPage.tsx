@@ -5,8 +5,9 @@ import { generateStrategy, extractParamsFromCode } from "../services/aiGenerate"
 import { useStrategyStore } from "../stores/strategyStore";
 import StockSelector from "../components/StockSelector";
 import CodeEditor from "../components/CodeEditor";
+import { useToast } from "../components/Toast";
 
-const MAX_CODE_LENGTH = 8000;
+const MAX_CODE_LENGTH = 15000;
 
 interface ParamDef {
   name: string;
@@ -29,6 +30,7 @@ export default function StrategyEditorPage() {
   const navigate = useNavigate();
   const { getStrategy, saveStrategy } = useStrategyStore();
   const [name, setName] = useState("");
+  const { toast } = useToast();
   const [description, setDescription] = useState("");
   const [code, setCode] = useState(`class Strategy(BaseStrategy):
     def on_bar(self, context, bar_group):
@@ -105,7 +107,7 @@ useEffect(() => {
 
   const extractParamsLocal = () => {
     // 本地正则提取作为 fallback
-    const regex = /self\.params\.get\(["'](\w+)["']\s*,\s*([^)]+)\)/g;
+    const regex = /self\.params\.get\(["']([^'",]+)["']\s*,\s*([^)]+)\)/g;
     const found: ParamDef[] = [];
     let match;
     while ((match = regex.exec(code)) !== null) {
@@ -134,26 +136,30 @@ useEffect(() => {
 
   const save = async () => {
     if (!name.trim()) {
-      alert("请输入策略名称");
+      toast("请输入策略名称", "error");
       return;
     }
     if (codeOverLimit) {
-      alert(`策略代码超出 ${MAX_CODE_LENGTH} 字符限制，当前 ${code.length} 字符`);
+      toast(`策略代码超出 ${MAX_CODE_LENGTH} 字符限制`, "error");
       return;
     }
-    const saved = await saveStrategy({
-      id,
-      name,
-      description,
-      code,
-      type: "single_stock",
-      params: Object.fromEntries(params.map((p) => [p.name, p.default])),
-    });
-    if (!id && saved.id) {
-      navigate(`/strategies/${saved.id}`);
-      return;
+    try {
+      const saved = await saveStrategy({
+        id,
+        name,
+        description,
+        code,
+        type: "single_stock",
+        params: Object.fromEntries(params.map((p) => [p.name, p.default])),
+      });
+      if (!id && saved && saved.id) {
+        navigate(`/strategies/${saved.id}`);
+        return;
+      }
+      toast("保存成功", "success");
+    } catch (e: any) {
+      toast(e.response?.data?.error || e.message || "保存失败", "error");
     }
-    alert("保存成功");
   };
 
   const generate = async () => {
@@ -163,7 +169,7 @@ useEffect(() => {
       const data = await generateStrategy(prompt);
       setCode(data.generated_code);
     } catch (e: any) {
-      alert(e.message || "AI生成失败");
+      toast(e.message || "AI生成失败", "error");
     } finally {
       setGenerating(false);
     }
@@ -198,11 +204,11 @@ useEffect(() => {
 
   const runBacktest = async () => {
     if (!code.trim()) {
-      alert("策略代码不能为空");
+      toast("策略代码不能为空", "error");
       return;
     }
     if (!fullMarketScan && selectedStocks.length === 0) {
-      alert("请至少选择一只股票，或开启全市场扫描");
+      toast("请至少选择一只股票，或开启全市场扫描", "error");
       return;
     }
     setBacktesting(true);
@@ -234,7 +240,7 @@ useEffect(() => {
       const { data } = await backtestAPI.submit(backtestParams);
       navigate(`/backtests/${data.id}`);
     } catch (e: any) {
-      alert(e.response?.data?.detail || "回测提交失败");
+      toast(e.response?.data?.error || e.response?.data?.detail || "回测提交失败", "error");
     } finally {
       setBacktesting(false);
     }

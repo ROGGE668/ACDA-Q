@@ -1,15 +1,17 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams } from "react-router-dom";
-import { backtestAPI, marketAPI, getApiBase } from "../services/api";
+import { backtestAPI, getApiBase } from "../services/api";
 import type { BacktestJob, BacktestResult, KLineData, Trade, Signal, SuitableStock, PaginatedTrades, MonthlyReturn } from "../services/api";
 import KLineChart from "../components/KLineChart";
 import EquityCurveChart from "../components/EquityCurveChart";
+import SectionErrorBoundary from "../components/SectionErrorBoundary";
 
 export default function BacktestResultPage() {
   const { id } = useParams();
   const [job, setJob] = useState<BacktestJob | null>(null);
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [klineData, setKlineData] = useState<KLineData[]>([]);
+  const [equityPoints, setEquityPoints] = useState<{datetime: string; total_value: number | string}[]>([]);
   const [activeSymbol, setActiveSymbol] = useState<string>("");
   const [period, setPeriod] = useState("1d");
   const [exchange, setExchange] = useState<string>("cn");
@@ -22,7 +24,10 @@ export default function BacktestResultPage() {
   const [tradesPage, setTradesPage] = useState(1);
   const [tradesData, setTradesData] = useState<PaginatedTrades | null>(null);
   const [tradesLoading, setTradesLoading] = useState(false);
-  const [klineError, setKlineError] = useState<string | null>(null);
+
+  // 跟踪 result 是否已加载（用于轮询闭包）
+  const resultLoadedRef = useRef(false);
+  const [chartLoading, setChartLoading] = useState(true);
 
   // Load initial job + fallback poll
   useEffect(() => {
@@ -32,9 +37,20 @@ export default function BacktestResultPage() {
       try {
         const res = await backtestAPI.get(id);
         setJob(res.data);
-        if (res.data.status === "success" && !result) {
-          const r = await backtestAPI.result(id);
-          setResult(r.data);
+        if (res.data.period) setPeriod(res.data.period);
+        if (res.data.status === "success") {
+          resultLoadedRef.current = true;
+          // Fire result + chart + trades in parallel
+          setChartLoading(true);
+          Promise.allSettled([
+            backtestAPI.result(id).then(r => setResult(r.data)),
+            backtestAPI.chart(id, "auto").then((r: any) => {
+              setEquityPoints(r.data?.points || []);
+              setKlineData(r.data?.kline_bars || []);
+            }),
+            backtestAPI.trades(id, 1, 50).then(r => { setTradesData(r.data); setTradesPage(1); }),
+          ]).catch(e => console.error("Parallel load failed:", e))
+            .finally(() => setChartLoading(false));
         }
       } catch (e) {
         console.error("Load job failed:", e);
@@ -47,23 +63,28 @@ export default function BacktestResultPage() {
     fallbackPollRef.current = setInterval(() => {
       backtestAPI.get(id).then((res) => {
         setJob(res.data);
-        if (res.data.status === "success") {
-          if (!result) {
-            backtestAPI.result(id).then((r) => setResult(r.data));
-          }
-          if (fallbackPollRef.current) {
-            clearInterval(fallbackPollRef.current);
-            fallbackPollRef.current = null;
-          }
+        if (res.data.period) setPeriod(res.data.period);
+        if (res.data.status === "success" && !resultLoadedRef.current) {
+          resultLoadedRef.current = true;
+          setChartLoading(true);
+          Promise.allSettled([
+            backtestAPI.result(id).then(r => setResult(r.data)),
+            backtestAPI.chart(id, "auto").then((r: any) => {
+              setEquityPoints(r.data?.points || []);
+              setKlineData(r.data?.kline_bars || []);
+            }),
+            backtestAPI.trades(id, 1, 50).then(r => { setTradesData(r.data); setTradesPage(1); }),
+          ]).catch(e => console.error("Parallel poll load failed:", e))
+            .finally(() => setChartLoading(false));
         }
-        if (res.data.status === "failed" && fallbackPollRef.current) {
+        if ((res.data.status === "success" || res.data.status === "failed") && fallbackPollRef.current) {
           clearInterval(fallbackPollRef.current);
           fallbackPollRef.current = null;
         }
       }).catch((e) => {
         console.error("[Polling] fallback poll error:", e);
       });
-    }, 3000);
+    }, 500);
 
     return () => {
       if (fallbackPollRef.current) clearInterval(fallbackPollRef.current);
@@ -76,7 +97,19 @@ export default function BacktestResultPage() {
     if (wsRef.current) return;
 
     const apiBase = getApiBase();
-    const wsUrl = `${apiBase.replace(/^http/, "ws")}/ws/backtest/${id}`;
+    const wsBase = apiBase
+      ? apiBase.replace(/^http/, "ws")
+      : `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}`;
+    const baseUrl = `${wsBase}/backtests/${id}/ws`;
+    let wsToken = "";
+    try {
+      const raw = localStorage.getItem("acda_auth_access_token");
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        wsToken = typeof parsed === "string" ? parsed : "";
+      }
+    } catch (_) {}
+    const wsUrl = wsToken ? `${baseUrl}?token=${encodeURIComponent(wsToken)}` : baseUrl;
     let retryCount = 0;
     const maxRetries = 3;
 
@@ -98,9 +131,22 @@ export default function BacktestResultPage() {
           try {
             const msg = JSON.parse(event.data);
             if (msg.status) {
-              setJob((prev: BacktestJob | null) => (prev ? { ...prev, status: msg.status } : prev));
-              if (msg.status === "success" && !result) {
-                backtestAPI.result(id).then((r) => setResult(r.data));
+              setJob((prev: BacktestJob | null) => {
+                if (!prev) return prev;
+                const updated = { ...prev, status: msg.status };
+                if (msg.period) setPeriod(msg.period);
+                return updated;
+              });
+              if (msg.status === "success" && !resultLoadedRef.current) {
+                resultLoadedRef.current = true;
+                Promise.allSettled([
+                  backtestAPI.result(id).then(r => setResult(r.data)),
+                  backtestAPI.chart(id, "auto").then((r: any) => {
+                    setEquityPoints(r.data?.points || []);
+                    setKlineData(r.data?.kline_bars || []);
+                  }),
+                  backtestAPI.trades(id, 1, 50).then(r => { setTradesData(r.data); setTradesPage(1); }),
+                ]).catch(e => console.error("Parallel WS load failed:", e));
               }
             }
           } catch (e) {
@@ -141,33 +187,10 @@ export default function BacktestResultPage() {
     };
   }, [id]);
 
-  // Load K-line after success
-  useEffect(() => {
-    if (!job || job.status !== "success" || !result) return;
-
-    const symbols = job.symbols || [];
-    if (symbols.length === 0) return;
-
-    const start = job.start_date?.slice(0, 10);
-    const end = job.end_date?.slice(0, 10);
-    if (!start || !end) return;
-
-    const target = activeSymbol || symbols[0];
-    marketAPI.history(target, start, end, exchange, period).then((res) => {
-      setKlineData(res.data?.data || []);
-      if (!res.data?.data?.length) {
-        console.warn(`[K-line] No data returned for ${target}`);
-      }
-    }).catch((e) => {
-      console.error("K-line load failed:", e);
-      setKlineData([]);
-      setKlineError(`K线加载失败: ${e?.message || "未知错误"}`);
-    });
-  }, [job, result, activeSymbol, exchange, period]);
 
   // Load trades with pagination
   const loadTrades = useCallback(async (page: number) => {
-    if (!id || !job || job.status !== "success") return;
+    if (!id) return;
     setTradesLoading(true);
     try {
       const res = await backtestAPI.trades(id, page, 50);
@@ -178,28 +201,25 @@ export default function BacktestResultPage() {
     } finally {
       setTradesLoading(false);
     }
-  }, [id, job]);
+  }, [id]);
 
-  useEffect(() => {
-    if (job?.status === "success") {
-      loadTrades(1);
-    }
-  }, [job, loadTrades]);
-
-  const escapeHtml = (str: string): string =>
-    str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
   if (!job) return <div style={{textAlign:"center",padding:"2rem",color:"var(--muted)"}}>加载中...</div>;
 
   const summary = job.result_summary || result?.summary || {};
-  const isScan = job.scope === "scan" || !!result?.signals;
+  const isScan = job.scope === "scan" || (result?.signals?.length ?? 0) > 0;
   const symbols = job.symbols || [];
   const monthlyReturns = summary.monthly_returns || [];
   const signals = result?.signals || [];
   const suitableStocks = result?.suitable_stocks || [];
 
   // Trade markers for K-line
-  const allTrades = result?.trades || [];
+  const allTrades = (result?.trades || []).map((t: any) => ({
+    ...t,
+    timestamp: t.timestamp || t.datetime,
+    type: t.type || t.side,
+    amount: t.amount || t.quantity,
+  }));
   const tradeMarkers = allTrades
     .filter((t: Trade) => t.symbol === (activeSymbol || symbols[0]))
     .map((t: Trade) => ({
@@ -321,7 +341,7 @@ export default function BacktestResultPage() {
                   <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
                     <td style={{ padding: "0.25rem" }}>{s.symbol}</td>
                     <td style={{ padding: "0.25rem", color: s.direction === "buy" ? "#22c55e" : "#ef4444" }}>{s.direction === "buy" ? "买入" : "卖出"}</td>
-                    <td style={{ padding: "0.25rem" }}>{s.timestamp?.slice(0, 10)}</td>
+                    <td style={{ padding: "0.25rem" }}>{period !== "1d" && period !== "1w" ? s.timestamp?.replace(/\+\d{2}:\d{2}$/, "").replace("T", " ") : s.timestamp?.slice(0, 10)}</td>
                     <td style={{ padding: "0.25rem" }}>{s.price}</td>
                     <td style={{ padding: "0.25rem" }}>{s.score}</td>
                   </tr>
@@ -349,24 +369,38 @@ export default function BacktestResultPage() {
       )}
 
       {/* 净值曲线（降采样） */}
+      <SectionErrorBoundary title="净值曲线">
       {!isScan && job.status === "success" && (
         <div className="card" style={{ marginTop: "1rem" }}>
           <h3>净值曲线</h3>
-          <EquityCurveChart jobId={id!} initialCash={job.initial_cash} />
+          {chartLoading && equityPoints.length === 0 ? (
+            <div style={{ height: 300, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--muted)", fontSize: "0.875rem" }}>
+              <div style={{ textAlign: "center" }}>
+                <div style={{ marginBottom: "0.5rem", animation: "pulse 1.5s ease-in-out infinite" }}>⏳</div>
+                <div>正在加载净值数据...</div>
+              </div>
+            </div>
+          ) : (
+            <EquityCurveChart data={equityPoints} initialCash={job.initial_cash} />
+          )}
         </div>
       )}
+      </SectionErrorBoundary>
 
+      <SectionErrorBoundary title="月度收益">
       {!isScan && monthlyReturns.length > 0 && (
         <div className="card" style={{ marginTop: "1rem" }}>
           <h3>月度收益分布</h3>
           <MonthlyHeatmap data={monthlyReturns} />
         </div>
       )}
+      </SectionErrorBoundary>
 
-      {!isScan && symbols.length > 0 && (
+      <SectionErrorBoundary title="K线图">
+      {!isScan && (symbols.length > 0 || chartLoading) && (
         <div className="card" style={{ marginTop: "1rem" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
-            <h3 style={{ margin: 0 }}>K 线与交易标记 ({tradeMarkers.length}笔)</h3>
+            <h3 style={{ margin: 0 }}>K 线与交易标记 ({chartLoading && klineData.length === 0 ? "--" : tradeMarkers.length}笔)</h3>
             <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
               {symbols.length > 1 && (
                 <>
@@ -390,12 +424,22 @@ export default function BacktestResultPage() {
               </select>
             </div>
           </div>
-          <KLineChart data={klineData} trades={tradeMarkers} period={period} onPeriodChange={setPeriod} />
-          {klineError && <p style={{ color: "#ef4444", fontSize: "0.875rem", marginTop: "0.5rem" }} dangerouslySetInnerHTML={{ __html: escapeHtml(klineError) }} />}
+          {chartLoading && klineData.length === 0 ? (
+            <div style={{ height: 400, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--muted)", fontSize: "0.875rem" }}>
+              <div style={{ textAlign: "center" }}>
+                <div style={{ marginBottom: "0.5rem", animation: "pulse 1.5s ease-in-out infinite" }}>⏳</div>
+                <div>正在加载K线数据...</div>
+              </div>
+            </div>
+          ) : (
+            <KLineChart data={klineData} trades={tradeMarkers} period={period} onPeriodChange={setPeriod} />
+          )}
         </div>
       )}
+      </SectionErrorBoundary>
 
       {/* 交易记录分页 */}
+      <SectionErrorBoundary title="交易记录">
       {!isScan && tradesData && tradesData.total > 0 && (
         <div className="card" style={{ marginTop: "1rem" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -419,7 +463,7 @@ export default function BacktestResultPage() {
               <tbody>
                 {tradesData.items.map((t: Trade, i: number) => (
                   <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
-                    <td style={{ padding: "0.25rem" }}>{t.timestamp?.slice(0, 10)}</td>
+                    <td style={{ padding: "0.25rem" }}>{period !== "1d" && period !== "1w" ? t.timestamp?.replace(/\+\d{2}:\d{2}$/, "").replace("T", " ") : t.timestamp?.slice(0, 10)}</td>
                     <td style={{ padding: "0.25rem" }}>{t.symbol}</td>
                     <td style={{ padding: "0.25rem", color: t.type === "buy" ? "#22c55e" : "#ef4444" }}>{t.type === "buy" ? "买入" : "卖出"}</td>
                     <td style={{ padding: "0.25rem" }}>{t.amount}</td>
@@ -456,6 +500,7 @@ export default function BacktestResultPage() {
           )}
         </div>
       )}
+      </SectionErrorBoundary>
     </div>
   );
 }

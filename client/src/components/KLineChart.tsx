@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useMemo } from "react";
 import {
   createChart,
   IChartApi,
@@ -42,10 +42,71 @@ interface KLineChartProps {
 
 const PERIODS = ["1m", "5m", "15m", "30m", "1h", "1d", "1w"];
 
+// 将后端存储的周期格式（1min/5min/60min 等）标准化为前端按钮格式（1m/5m/1h 等）
+const BACKEND_TO_FRONTEND: Record<string, string> = {
+  "1min": "1m", "5min": "5m", "15min": "15m", "30min": "30m", "60min": "1h",
+};
+
+function normalizePeriod(p: string): string {
+  return BACKEND_TO_FRONTEND[p] || p;
+}
+
 function toTs(dt: string): number {
-  const m = (dt || "").match(/(\d{4})-(\d{2})-(\d{2})/);
-  if (m) return Date.UTC(+m[1], +m[2] - 1, +m[3]) / 1000;
+  const m = (dt || "").match(/(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?/);
+  if (m) return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0)) / 1000;
+  const d = (dt || "").match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (d) return Date.UTC(+d[1], +d[2] - 1, +d[3]) / 1000;
   return 0;
+}
+
+// 按目标周期聚合 K 线数据（客户端降采样）
+const PERIOD_MINUTES: Record<string, number> = {
+  "1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "1d": 1440, "1w": 10080,
+};
+
+function resampleKline(data: KLineItem[], targetPeriod: string): KLineItem[] {
+  const targetMin = PERIOD_MINUTES[targetPeriod] || 1;
+  // 获取源数据的最小周期
+  let srcMin = Infinity;
+  for (let i = 1; i < Math.min(data.length, 5); i++) {
+    const diff = (toTs(data[i].datetime) - toTs(data[i - 1].datetime)) / 60;
+    if (diff > 0 && diff < srcMin) srcMin = diff;
+  }
+  if (srcMin === Infinity || srcMin <= 0) srcMin = 1;
+  // 如果目标周期 <= 源周期，不需要聚合
+  if (targetMin <= srcMin) return data;
+
+  const buckets = new Map<number, KLineItem[]>();
+  for (const bar of data) {
+    const ts = toTs(bar.datetime);
+    // 按目标周期截断时间戳
+    const bucketTs = Math.floor(ts / (targetMin * 60)) * (targetMin * 60);
+    if (!buckets.has(bucketTs)) buckets.set(bucketTs, []);
+    buckets.get(bucketTs)!.push(bar);
+  }
+
+  const result: KLineItem[] = [];
+  for (const [bucketTs, bars] of buckets) {
+    const first = bars[0];
+    const last = bars[bars.length - 1];
+    const dt = new Date(bucketTs * 1000);
+    const y = dt.getUTCFullYear();
+    const mo = String(dt.getUTCMonth() + 1).padStart(2, "0");
+    const d = String(dt.getUTCDate()).padStart(2, "0");
+    const h = String(dt.getUTCHours()).padStart(2, "0");
+    const mi = String(dt.getUTCMinutes()).padStart(2, "0");
+    const datetime = `${y}-${mo}-${d}T${h}:${mi}:00`;
+    result.push({
+      datetime,
+      open: Number(first.open),
+      high: Math.max(...bars.map(b => Number(b.high))),
+      low: Math.min(...bars.map(b => Number(b.low))),
+      close: Number(last.close),
+      volume: bars.reduce((s, b) => s + (Number(b.volume) || 0), 0),
+    });
+  }
+  result.sort((a, b) => toTs(a.datetime) - toTs(b.datetime));
+  return result;
 }
 
 function calcMA(data: KLineItem[], period: number): { time: number; value: number }[] {
@@ -114,31 +175,45 @@ class TradeBackgroundPrimitive {
   }
 
   update() {
-    if (this._requestUpdate) this._requestUpdate();
+    this._requestUpdate?.();
   }
 
-  paneViews() {
-    return [
-      {
-        renderer: () => ({
-          draw: (target: any) => {
-            target.useMediaCoordinateSpace(({ context, mediaSize }: any) => {
-              const ranges = this._getRanges();
-              for (const range of ranges) {
-                const x1 = this._chart!.timeScale().timeToCoordinate(toTs(range.startTime) as any);
-                const x2 = this._chart!.timeScale().timeToCoordinate(toTs(range.endTime) as any);
-                if (x1 === null && x2 === null) continue;
-                const left = x1 ?? 0;
-                const right = x2 ?? mediaSize.width;
-                if (right <= left) continue;
-                context.fillStyle = range.color;
-                context.fillRect(left, 0, right - left, mediaSize.height);
-              }
-            });
-          },
-        }),
+  renderer() {
+    return {
+      draw: (target: any) => {
+        try {
+          const chart = this._chart;
+          if (!chart) return;
+          const ranges = this._getRanges();
+          if (!ranges.length) return;
+
+          const timeScale = chart.timeScale();
+          const priceScale = chart.priceScale("right");
+
+          const seriesArr = typeof (chart as any).serieses === "function" ? (chart as any).serieses() : [];
+          const series = seriesArr[0];
+          if (!series) return;
+
+          for (const range of ranges) {
+            const x1 = timeScale.timeToCoordinate(toTs(range.startTime) as any);
+            const x2 = timeScale.timeToCoordinate(toTs(range.endTime) as any);
+            if (x1 === null || x2 === null) continue;
+
+            const data0 = series.data()?.[0];
+            if (!data0) continue;
+            const yTop = (priceScale as any).priceToCoordinate((series as any).priceToCoordinate(data0.high ?? 100) ?? 0);
+            const yBottom = (priceScale as any).priceToCoordinate((series as any).priceToCoordinate(data0.low ?? 0) ?? 100);
+            if (yTop === null || yBottom === null) continue;
+
+            target.rect(
+              { x: Math.min(x1, x2), y: Math.min(yTop, yBottom) },
+              { width: Math.abs(x2 - x1), height: Math.abs(yBottom - yTop) },
+              range.color
+            );
+          }
+        } catch (_) {}
       },
-    ];
+    };
   }
 }
 
@@ -153,11 +228,58 @@ export default function KLineChart({ data, trades = [], height = 400, period = "
   const validData: KLineItem[] = Array.isArray(data) ? data : [];
   const validTrades: TradeMarker[] = Array.isArray(trades) ? trades : [];
 
-  const dataFp = validData.length + "|" + (validData.length > 0 ? validData[0].datetime + validData[validData.length - 1].datetime : "");
+  // 标准化后端周期格式（1min→1m, 5min→5m, 60min→1h 等）
+  const normalizedPeriod = normalizePeriod(period);
+
+  // 客户端降采样到目标周期
+  const displayData = useMemo(
+    () => resampleKline(validData, normalizedPeriod),
+    [validData, normalizedPeriod]
+  );
+
+  // 构建 resampled 时间戳集合，用于将交易标记对齐到最近的 K 线
+  const candleTimeSet = useMemo(() => {
+    const set = new Set<number>();
+    for (const d of displayData) set.add(toTs(d.datetime));
+    return set;
+  }, [displayData]);
+
+  // 构建有序时间戳数组，用于 snap 交易时间到最近的 K 线
+  const candleTimes = useMemo(() => {
+    return Array.from(candleTimeSet).sort((a, b) => a - b);
+  }, [candleTimeSet]);
+
+  // snap 交易时间到最近的 candle 时间戳
+  const snapTradeTime = (tradeTime: string): number => {
+    const ts = toTs(tradeTime);
+    if (candleTimeSet.has(ts)) return ts;
+    // 二分查找最近的 candle 时间
+    let lo = 0, hi = candleTimes.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (candleTimes[mid] < ts) lo = mid + 1; else hi = mid;
+    }
+    // 比较 lo 和 lo-1，选最近的
+    if (lo > 0 && Math.abs(candleTimes[lo - 1] - ts) < Math.abs(candleTimes[lo] - ts)) {
+      return candleTimes[lo - 1];
+    }
+    return candleTimes[lo] ?? ts;
+  };
+
+  // 用 snap 后的时间生成有效的交易标记
+  const snappedTrades = useMemo(() => {
+    if (candleTimes.length === 0) return validTrades;
+    return validTrades.map((t) => ({
+      ...t,
+      _snapTs: snapTradeTime(t.time),
+    }));
+  }, [validTrades, candleTimes]);
+
+  const dataFp = displayData.length + "|" + (displayData.length > 0 ? displayData[0].datetime + displayData[displayData.length - 1].datetime : "") + "|" + normalizedPeriod;
   const prevDataFp = useRef("");
 
   useEffect(() => {
-    if (!chartContainerRef.current || validData.length === 0) return;
+    if (!chartContainerRef.current || displayData.length === 0) return;
     if (dataFp === prevDataFp.current) return;
     prevDataFp.current = dataFp;
 
@@ -173,7 +295,8 @@ export default function KLineChart({ data, trades = [], height = 400, period = "
     try {
       chart = createChart(chartContainerRef.current, {
         height,
-        layout: { background: { color: "#0f172a" }, textColor: "#94a3b8" },
+        layout: { background: { color: "#0f172a" }, textColor: "#94a3b8", fontFamily: "-apple-system, BlinkMacSystemFont, PingFang SC, Microsoft YaHei, sans-serif" },
+        localization: { locale: "zh-CN" },
         grid: { vertLines: { color: "#1e293b" }, horzLines: { color: "#1e293b" } },
         crosshair: {
           mode: 1,
@@ -207,7 +330,7 @@ export default function KLineChart({ data, trades = [], height = 400, period = "
     candleRef.current = candleSeries as any;
 
     candleSeries.setData(
-      validData.map((d) => ({
+      displayData.map((d) => ({
         time: toTs(d.datetime) as any,
         open: Number(d.open) || 0,
         high: Number(d.high) || 0,
@@ -217,7 +340,7 @@ export default function KLineChart({ data, trades = [], height = 400, period = "
     );
 
     // MA
-    const ma5 = calcMA(validData, 5);
+    const ma5 = calcMA(displayData, 5);
     if (ma5.length)
       chart
         .addSeries(LineSeries, {
@@ -227,7 +350,7 @@ export default function KLineChart({ data, trades = [], height = 400, period = "
           lastValueVisible: false,
         } as any)
         .setData(ma5 as any);
-    const ma10 = calcMA(validData, 10);
+    const ma10 = calcMA(displayData, 10);
     if (ma10.length)
       chart
         .addSeries(LineSeries, {
@@ -237,7 +360,7 @@ export default function KLineChart({ data, trades = [], height = 400, period = "
           lastValueVisible: false,
         } as any)
         .setData(ma10 as any);
-    const ma20 = calcMA(validData, 20);
+    const ma20 = calcMA(displayData, 20);
     if (ma20.length)
       chart
         .addSeries(LineSeries, {
@@ -249,7 +372,7 @@ export default function KLineChart({ data, trades = [], height = 400, period = "
         .setData(ma20 as any);
 
     // 成交量
-    if (validData[0]?.volume !== undefined) {
+    if (displayData[0]?.volume !== undefined) {
       const volSeries = chart.addSeries(HistogramSeries, {
         color: "#38bdf8",
         priceFormat: { type: "volume" },
@@ -259,7 +382,7 @@ export default function KLineChart({ data, trades = [], height = 400, period = "
       });
       volSeries.priceScale().applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
       volSeries.setData(
-        validData.map((d) => ({
+        displayData.map((d) => ({
           time: toTs(d.datetime) as any,
           value: Number(d.volume) || 0,
           color: (Number(d.close) || 0) >= (Number(d.open) || 0) ? "#ef4444" : "#22c55e",
@@ -296,7 +419,7 @@ export default function KLineChart({ data, trades = [], height = 400, period = "
       chartRef.current = null;
       candleRef.current = null;
     };
-  }, [dataFp, validData, height]);
+  }, [dataFp, displayData, height, normalizedPeriod]);
 
   // 交易标记 + 持有区间背景（独立更新，不重建 chart）
   useEffect(() => {
@@ -327,13 +450,13 @@ export default function KLineChart({ data, trades = [], height = 400, period = "
       }
     }
 
-    const markers = validTrades.map((t) => {
+    const markers = snappedTrades.map((t: any) => {
       const isBuy = t.type === "BUY";
       const p = t.pnl ?? 0;
       const days = holdingDaysMap.get(t.time);
       const daysText = !isBuy && days !== undefined ? `(${days}天)` : "";
       return {
-        time: toTs(t.time) as any,
+        time: t._snapTs as any,
         position: isBuy ? ("belowBar" as const) : ("aboveBar" as const),
         color: isBuy ? "#ffffff" : p >= 0 ? "#ef4444" : "#22c55e",
         shape: isBuy ? ("arrowUp" as const) : ("arrowDown" as const),
@@ -344,9 +467,9 @@ export default function KLineChart({ data, trades = [], height = 400, period = "
       };
     });
     markersRef.current.setMarkers(markers);
-  }, [validTrades]);
+  }, [snappedTrades, candleTimes]);
 
-  if (validData.length === 0) {
+  if (displayData.length === 0) {
     return <div style={{ color: "#94a3b8", padding: "2rem", textAlign: "center" }}>暂无 K 线数据</div>;
   }
   return (
@@ -359,8 +482,8 @@ export default function KLineChart({ data, trades = [], height = 400, period = "
             style={{
               padding: "0.25rem 0.5rem",
               fontSize: "0.75rem",
-              background: period === p ? "var(--primary)" : "var(--bg)",
-              color: period === p ? "#fff" : "var(--muted)",
+              background: normalizedPeriod === p ? "var(--primary)" : "var(--bg)",
+              color: normalizedPeriod === p ? "#fff" : "var(--muted)",
               border: "1px solid var(--border)",
               borderRadius: "0.25rem",
               cursor: "pointer",

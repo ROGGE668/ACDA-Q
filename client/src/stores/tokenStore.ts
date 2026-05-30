@@ -1,18 +1,26 @@
-import { Store } from "@tauri-apps/plugin-store";
+import { isTauri, BrowserStore, IStore } from "./web-compat";
 
-let storeInstance: Store | null = null;
+let storeInstance: IStore | null = null;
 
-async function getStore(): Promise<Store> {
+async function getStore(): Promise<IStore> {
   if (!storeInstance) {
-    storeInstance = await Store.load("auth.json");
+    if (isTauri()) {
+      const { Store } = await import("@tauri-apps/plugin-store");
+      storeInstance = await Store.load("auth.json") as unknown as IStore;
+    } else {
+      storeInstance = new BrowserStore("auth");
+    }
   }
   return storeInstance;
 }
 
 export async function getAccessToken(): Promise<string | null> {
+  // 浏览器模式: token 在 httpOnly cookie 中，JS 不可读，返回 null
+  if (!isTauri()) return null;
   try {
     const store = await getStore();
-    return (await store.get<string>("access_token")) || null;
+    const val = await store.get("access_token");
+    return val || null;
   } catch (e) {
     console.error("Failed to get access_token:", e);
     return null;
@@ -20,9 +28,12 @@ export async function getAccessToken(): Promise<string | null> {
 }
 
 export async function getRefreshToken(): Promise<string | null> {
+  // 浏览器模式: token 在 httpOnly cookie 中，JS 不可读，返回 null
+  if (!isTauri()) return null;
   try {
     const store = await getStore();
-    return (await store.get<string>("refresh_token")) || null;
+    const val = await store.get("refresh_token");
+    return val || null;
   } catch (e) {
     console.error("Failed to get refresh_token:", e);
     return null;
@@ -30,6 +41,8 @@ export async function getRefreshToken(): Promise<string | null> {
 }
 
 export async function setTokens(access: string, refresh: string): Promise<void> {
+  // 浏览器模式: token 由后端 httpOnly cookie 管理，无需 JS 存储
+  if (!isTauri()) return;
   try {
     const store = await getStore();
     await store.set("access_token", access);
@@ -44,23 +57,22 @@ export async function setTokens(access: string, refresh: string): Promise<void> 
 
 export async function clearTokens(): Promise<void> {
   try {
-    const store = await getStore();
-    await store.delete("access_token");
-    await store.delete("refresh_token");
-    await store.save();
+    if (isTauri()) {
+      const store = await getStore();
+      await store.delete("access_token");
+      await store.delete("refresh_token");
+      await store.save();
+    }
     broadcastTokenUpdate();
   } catch (e) {
     console.error("Failed to clear tokens:", e);
   }
 }
 
-// Multi-tab sync: use localStorage as a signaling channel
 function broadcastTokenUpdate() {
   try {
     localStorage.setItem("token_sync", Date.now().toString());
-  } catch (e) {
-    // localStorage may be unavailable in some contexts
-  }
+  } catch (_) {}
 }
 
 export function onTokenSync(callback: () => void): () => void {

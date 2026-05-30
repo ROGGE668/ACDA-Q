@@ -5,6 +5,7 @@ pub mod api;
 pub mod auth;
 pub mod backtest;
 pub mod config;
+pub mod crypto;
 pub mod data;
 pub mod db;
 pub mod error;

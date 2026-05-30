@@ -1,7 +1,6 @@
-import { fetch } from "@tauri-apps/plugin-http";
-import { invoke } from "@tauri-apps/api/core";
 import { clearTokens, getAccessToken, getRefreshToken, setTokens } from "../stores/tokenStore";
 import { useSettingsStore } from "../stores/settingsStore";
+import { isTauri } from "../stores/web-compat";
 
 let API_BASE = import.meta.env.VITE_API_BASE || "";
 let settingsLoaded = false;
@@ -30,7 +29,6 @@ async function ensureSettingsLoaded(): Promise<void> {
   await settingsPromise;
 }
 
-// 添加日志函数（生产时可关闭）
 const debug = (...args: any[]) => {
   if (import.meta.env.DEV) console.log("[API]", ...args);
 };
@@ -42,44 +40,32 @@ function generateRequestId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-let cachedFingerprint: string | null = null;
+import { getDeviceFingerprint } from "../utils/fingerprint";
 
-async function getDeviceFingerprint(): Promise<string | null> {
-  if (cachedFingerprint) return cachedFingerprint;
-  try {
-    // 优先使用 Tauri 原生接口获取硬件指纹
-    const fp = await invoke<string>("get_device_fingerprint");
-    cachedFingerprint = fp;
-    return fp;
-  } catch (e) {
-    // 降级方案：非 Tauri 环境使用浏览器指纹
-    // 注意：此降级方案仅供参考，设备指纹应优先使用硬件级标识
-    debug("Tauri fingerprint unavailable (fallback mode):", e);
-    try {
-      const fallback = `${navigator.userAgent}|${screen.width}x${screen.height}|${navigator.language}`;
-      cachedFingerprint = fallback;
-      return fallback;
-    } catch (_) {
-      return null;
-    }
+// 浏览器中使用原生 fetch（带 cookie），Tauri 中使用 plugin-http
+async function compatFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  if (isTauri()) {
+    const { fetch: tauriFetch } = await import("@tauri-apps/plugin-http");
+    return tauriFetch(input as string | URL, init);
   }
+  // 浏览器模式: credentials=include 确保 httpOnly cookie 自动携带
+  return fetch(input, { ...init, credentials: "include" });
 }
 
 async function request(method: string, url: string, data?: any, config?: any) {
-  // Wait for settings to load if API_BASE is not set yet
-  if (!API_BASE && API_BASE !== "" && !url.startsWith("http")) {
+  if (!API_BASE && !url.startsWith("http")) {
     await ensureSettingsLoaded();
   }
 
   const fullUrl = url.startsWith("http") ? url : `${API_BASE}${url}`;
 
-  if (!API_BASE && API_BASE !== "" && !url.startsWith("http")) {
+  if (!fullUrl) {
     throw new Error("API base URL not configured. Please set it in Settings.");
   }
 
   debug(method, fullUrl);
 
-  const fingerprint = await getDeviceFingerprint();
+  const fingerprint: string | null = await getDeviceFingerprint().catch(() => null);
   const token = await getAccessToken();
 
   const headers: Record<string, string> = {
@@ -88,7 +74,8 @@ async function request(method: string, url: string, data?: any, config?: any) {
     ...(config?.headers || {}),
   };
 
-  if (token) {
+  // Tauri 模式使用 Authorization header，浏览器模式使用 httpOnly cookie
+  if (isTauri() && token) {
     headers["Authorization"] = `Bearer ${token}`;
   }
 
@@ -105,20 +92,20 @@ async function request(method: string, url: string, data?: any, config?: any) {
   }
 
   try {
-    const response = await fetch(fullUrl, options);
+    const response = await compatFetch(fullUrl, options);
 
     if (response.status === 401) {
       if (!config?._retry) {
         try {
-          // plugin-http 不共享 WebView Cookie，直接用 Header 刷新
           const refreshTok = await getRefreshToken();
           if (refreshTok) {
-            const refreshRes = await fetch(`${API_BASE}/auth/refresh`, {
+            const refreshRes = await compatFetch(`${API_BASE}/auth/refresh`, {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
-                "Authorization": `Bearer ${refreshTok}`,
+                ...(isTauri() ? { "Authorization": `Bearer ${refreshTok}` } : {}),
               },
+              body: JSON.stringify({ refresh_token: refreshTok }),
             });
             if (refreshRes.ok) {
               const refreshData = await refreshRes.json();
@@ -136,6 +123,7 @@ async function request(method: string, url: string, data?: any, config?: any) {
         if (confirmed) {
           window.location.href = "/login";
         }
+        throw new Error("Session expired");
       }
     }
 
@@ -182,7 +170,6 @@ export const strategyAPI = {
   validate: (code: string) => api.post("/strategies/validate", { code }),
 };
 
-// backtestAPI types
 export interface BacktestJob {
   id: string;
   status: string;
@@ -193,6 +180,7 @@ export interface BacktestJob {
   initial_cash?: number;
   result_summary?: BacktestResultSummary;
   error_message?: string;
+  period?: string;
   created_at: string;
 }
 
@@ -280,6 +268,7 @@ export const backtestAPI = {
     api.get<KLineData[]>(`/backtests/${id}/chart${agg ? `?agg=${agg}` : ""}`),
   trades: (id: string, page: number = 1, pageSize: number = 50) =>
     api.get<PaginatedTrades>(`/backtests/${id}/trades?page=${page}&page_size=${pageSize}`),
+  remove: (id: string) => api.delete(`/backtests/${id}`),
 };
 
 export const deviceAPI = {
@@ -287,6 +276,7 @@ export const deviceAPI = {
   heartbeat: (data: any) => api.post("/devices/heartbeat", data),
   list: () => api.get("/devices"),
   revoke: (id: string) => api.post(`/devices/${id}/revoke`),
+  delete: (id: string) => api.delete(`/devices/${id}`),
 };
 
 export const subscriptionAPI = {

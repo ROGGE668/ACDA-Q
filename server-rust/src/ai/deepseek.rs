@@ -71,7 +71,11 @@ impl DeepSeekClient {
     }
 
     pub fn with_base_url(mut self, url: impl Into<String>) -> Self {
-        self.base_url = url.into();
+        let mut url = url.into();
+        if !url.ends_with("/chat/completions") {
+            url = url.trim_end_matches('/').to_string() + "/chat/completions";
+        }
+        self.base_url = url;
         self
     }
 
@@ -86,17 +90,45 @@ impl DeepSeekClient {
         prompt: &str,
     ) -> Result<(String, Option<u32>), AppError> {
         let system_prompt = r#"
-You are a quantitative trading strategy generator for A-share (Chinese stock market).
-Generate a Python strategy class that inherits from BaseStrategy and implements on_bar method.
+你是一个A股量化交易策略生成助手。根据用户描述生成Python策略代码。
 
-Requirements:
-- Use only numpy, pandas, and standard library
-- Buy/sell via context.buy(symbol, amount) and context.sell(symbol, amount)
-- Get historical data via context.history(symbol, field, lookback)
-- Class must be named 'Strategy'
-- Include proper docstring in Chinese
+严格规则：
+1. 代码总长度不超过15000字符
+2. 不要写任何注释（包括#注释和文档字符串），注释会导致运行错误
+3. 只生成 class Strategy(BaseStrategy) 类，不要定义 BaseStrategy（框架已提供）
+4. 必须实现 on_bar(self, context, bar_group) 方法
+5. bar_group 只包含当前交易日的数据（每个symbol一行），不要用它计算均线
+6. 计算均线等需要历史数据时，必须用 context.history(symbol, lookback) 获取最近N天的close列表
+7. 买入: context.buy(symbol, percent=0.1)，percent 为资金百分比
+8. 卖出: context.sell(symbol, percent=1.0)，percent 为持仓百分比
+9. 持仓查询: context.positions.get(symbol, 0) 返回持仓数量
+10. 策略参数用 self.params.get("参数名", 默认值) 获取，参数名必须使用中文
+11. 只用 numpy、pandas 和标准库
+12. 只输出 Python 代码，不要 markdown 代码块标记，不要任何解释文字
 
-Output ONLY the Python code, no markdown fences.
+参数名中文示例：
+- 均线周期类: "短期均线周期", "长期均线周期"
+- 阈值类: "买入阈值", "卖出阈值", "止损比例"
+- 仓位类: "单笔仓位比例", "最大持仓数量"
+- 其他: "回看天数", "冷却天数"
+
+示例:
+class Strategy(BaseStrategy):
+    def on_bar(self, context, bar_group):
+        for symbol in bar_group["symbol"].unique():
+            short_period = self.params.get("短期均线周期", 5)
+            long_period = self.params.get("长期均线周期", 20)
+            history = context.history(symbol, long_period + 1)
+            if len(history) < long_period + 1:
+                continue
+            closes = [h["close"] for h in history]
+            sma_s = sum(closes[-short_period:]) / short_period
+            sma_l = sum(closes[-long_period:]) / long_period
+            holding = context.positions.get(symbol, 0) > 0
+            if not holding and sma_s > sma_l:
+                context.buy(symbol, percent=0.95)
+            elif holding and sma_s < sma_l:
+                context.sell(symbol, percent=1.0)
 "#;
 
         let request = ChatCompletionRequest {

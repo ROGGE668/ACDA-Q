@@ -1,12 +1,14 @@
 //! ACDA-Q API 服务入口
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::{
     http::{HeaderValue, Method},
 };
 use tower_http::cors::CorsLayer;
+use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -15,6 +17,7 @@ mod api;
 mod auth;
 mod backtest;
 mod config;
+mod crypto;
 mod data;
 mod db;
 mod error;
@@ -36,6 +39,14 @@ use websocket::WsManager;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // CLI: 加密敏感配置值 (acda-q-server --encrypt <plaintext>)
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() >= 3 && (args[1] == "--encrypt" || args[1] == "--encrypt-key") {
+        let settings = crate::config::Settings::new()?;
+        let encrypted = crate::crypto::encrypt(&args[2], &settings.secret_key)?;
+        println!("{}", encrypted);
+        return Ok(());
+    }
     let is_worker = std::env::args().any(|a| a == "--worker");
 
     tracing_subscriber::registry()
@@ -104,9 +115,25 @@ async fn run_api_server() -> anyhow::Result<()> {
         metrics,
         ws_manager,
         queue,
+        chart_cache: Default::default(),
+    };
+
+    // 前端静态文件目录
+    let static_dir = std::env::var("ACDA_Q__STATIC_DIR")
+        .unwrap_or_else(|_| "/home/hong/ACDA-Q-RUST-v1/client/dist".to_string());
+    let static_path = PathBuf::from(&static_dir);
+    
+    let spa_fallback = if static_path.join("index.html").exists() {
+        info!("Serving static files from: {}", static_dir);
+        ServeDir::new(&static_path)
+            .fallback(ServeFile::new(static_path.join("index.html")))
+    } else {
+        info!("No static dir found at {}, running API-only mode", static_dir);
+        ServeDir::new("/nonexistent").fallback(ServeFile::new("/nonexistent"))
     };
 
     let app = create_router(state)
+        .fallback_service(spa_fallback)
         .layer(cors)
         .layer(TraceLayer::new_for_http());
 
@@ -114,7 +141,7 @@ async fn run_api_server() -> anyhow::Result<()> {
     info!("Server listening on http://{}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).await?;
 
     Ok(())
 }

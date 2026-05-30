@@ -1,18 +1,4 @@
-import { useAISettingsStore } from "../stores/aiSettingsStore";
-
-const SYSTEM_PROMPT = `你是一个专业的量化交易策略生成助手。请根据用户的自然语言描述，生成符合以下框架的Python策略代码。
-
-框架要求：
-1. 策略类必须继承 BaseStrategy
-2. 必须实现 on_bar(self, context, bar_group) 方法
-3. 使用 context.buy(symbol, percent=0.1) 买入（percent 为资金百分比）
-4. 使用 context.sell(symbol, percent=1.0) 卖出（percent 为持仓百分比）
-5. 使用 self.params.get("参数名", 默认值) 获取策略参数
-6. bar_group 是 pandas DataFrame，包含多只股票的数据，可通过 bar_group["symbol"].unique() 获取所有股票
-7. 单只股票数据通过 bar_group[bar_group["symbol"] == symbol] 过滤
-8. 可用字段：open, high, low, close, volume
-
-请只返回Python代码，不要包含任何解释、markdown代码块标记或其他文本。代码必须可直接运行。`;
+import api from "./api";
 
 export interface AIGenerateResult {
   generated_code: string;
@@ -20,81 +6,30 @@ export interface AIGenerateResult {
   tokens_used?: number;
 }
 
-function isValidHttpsUrl(url: string): boolean {
-  try {
-    const u = new URL(url);
-    if (u.protocol !== "https:") return false;
-    const host = u.hostname;
-    // Block private / internal IPs
-    const isPrivate =
-      host === "localhost" ||
-      host === "127.0.0.1" ||
-      host === "::1" ||
-      /^192\.168\.\d+\.\d+$/.test(host) ||
-      /^10\.\d+\.\d+\.\d+$/.test(host) ||
-      /^172\.(1[6-9]|2\d|3[01])\.\d+\.\d+$/.test(host) ||
-      /^169\.254\.\d+\.\d+$/.test(host) ||
-      host.endsWith(".local");
-    return !isPrivate;
-  } catch {
-    return false;
-  }
-}
-
 export async function generateStrategy(prompt: string): Promise<AIGenerateResult> {
-  const { deepseekApiKey, deepseekBaseUrl, deepseekModel } = useAISettingsStore.getState();
-
-  if (!deepseekApiKey.trim()) {
-    throw new Error("请先设置 DeepSeek API Key");
-  }
-
-  if (!isValidHttpsUrl(deepseekBaseUrl)) {
-    throw new Error("DeepSeek Base URL 必须是 https 地址，且不能是内网 IP 或 localhost");
-  }
-
-  const response = await fetch(`${deepseekBaseUrl}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${deepseekApiKey}`,
-    },
-    body: JSON.stringify({
-      model: deepseekModel,
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: prompt },
-      ],
-      temperature: 0.3,
-      max_tokens: 4096,
-    }),
+  const { data } = await api.post("/ai/generate", {
+    prompt,
+    model: "deepseek-chat",
   });
-
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: { message: `HTTP ${response.status}` } }));
-    throw new Error(error.error?.message || `DeepSeek API 请求失败: ${response.status}`);
-  }
-
-  const data = await response.json();
-  const generatedCode = data.choices?.[0]?.message?.content?.trim() || "";
+  let generatedCode = data.generated_code || "";
 
   // 清理可能的 markdown 代码块
-  let cleanCode = generatedCode;
-  if (cleanCode.startsWith("```python")) {
-    cleanCode = cleanCode.replace(/^```python\n/, "").replace(/\n```$/, "");
-  } else if (cleanCode.startsWith("```")) {
-    cleanCode = cleanCode.replace(/^```\n/, "").replace(/\n```$/, "");
+  if (generatedCode.startsWith("```python")) {
+    generatedCode = generatedCode.replace(/^```python\n/, "").replace(/\n```$/, "");
+  } else if (generatedCode.startsWith("```")) {
+    generatedCode = generatedCode.replace(/^```\n/, "").replace(/\n```$/, "");
   }
 
   return {
-    generated_code: cleanCode,
-    model: data.model || deepseekModel,
-    tokens_used: data.usage?.total_tokens,
+    generated_code: generatedCode,
+    model: data.model || "deepseek-chat",
+    tokens_used: data.tokens_used,
   };
 }
 
 export async function extractParamsFromCode(code: string, _signal?: AbortSignal): Promise<{ params: Array<{ name: string; default: any; type: string }> }> {
   // 本地正则提取参数，不调用远程API
-  const regex = /self\.params\.get\(["'](\w+)["']\s*,\s*([^)]+)\)/g;
+  const regex = /self\.params\.get\([\x27\x22]([\w\u4e00-\u9fff]+)[\x27\x22]\s*,\s*([^)]+)\)/g;
   const found: Array<{ name: string; default: any; type: string }> = [];
   let match;
   while ((match = regex.exec(code)) !== null) {
