@@ -1,9 +1,10 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Link } from "react-router-dom";
 import { useStrategyStore } from "../stores/strategyStore";
 
 export default function StrategyListPage() {
-  const { strategies, loading, loaded, fetchStrategies, removeStrategy } = useStrategyStore();
+  const { strategies, loading, loaded, fetchStrategies, removeStrategy, saveStrategy } = useStrategyStore();
 
   useEffect(() => {
     if (!loaded) {
@@ -11,9 +12,37 @@ export default function StrategyListPage() {
     }
   }, [loaded, fetchStrategies]);
 
+  const navigate = useNavigate();
+  const [removeError, setRemoveError] = useState("");
+  const [duplicating, setDuplicating] = useState<string | null>(null);
+
+  const duplicate = async (s: { id: string; name: string; description?: string; code: string; params?: Record<string, any>; strategy_type?: string }) => {
+    try {
+      setDuplicating(s.id);
+      const newName = s.name + " (副本)";
+      const saved = await saveStrategy({
+        name: newName,
+        description: s.description || "",
+        code: s.code,
+        type: s.strategy_type || "single_stock",
+        params: s.params || {},
+      });
+      navigate(`/strategies/${saved.id}`);
+    } catch (e: any) {
+      setRemoveError(e?.response?.data?.error || e?.message || "复制失败");
+    } finally {
+      setDuplicating(null);
+    }
+  };
   const remove = async (id: string) => {
-    if (!confirm("确定删除该策略？关联的回测记录也会保留。")) return;
-    await removeStrategy(id);
+    try {
+      setRemoveError("");
+      await removeStrategy(id);
+    } catch (e: any) {
+      const msg = e?.response?.data?.error || e?.message || "删除失败";
+      setRemoveError(msg);
+      console.error("[StrategyList] Delete failed:", e);
+    }
   };
 
   return (
@@ -29,6 +58,11 @@ export default function StrategyListPage() {
           </Link>
         </div>
       </div>
+      {removeError && (
+        <div style={{ marginTop: "0.5rem", padding: "0.5rem", background: "#7f1d1d", color: "#fca5a5", borderRadius: "0.375rem", fontSize: "0.875rem" }}>
+          {removeError}
+        </div>
+      )}
       <div style={{ marginTop: "1rem", display: "flex", flexDirection: "column", gap: "0.75rem" }}>
         {strategies.map((s) => (
           <div key={s.id} className="card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -40,6 +74,9 @@ export default function StrategyListPage() {
               <Link to={`/strategies/${s.id}`}>
                 <button className="secondary">编辑</button>
               </Link>
+              <button className="secondary" onClick={() => duplicate(s)} disabled={duplicating === s.id}>
+                {duplicating === s.id ? "复制中..." : "复制"}
+              </button>
               <button className="secondary" onClick={() => remove(s.id)} style={{ color: "#ef4444", borderColor: "#7f1d1d" }}>
                 删除
               </button>
