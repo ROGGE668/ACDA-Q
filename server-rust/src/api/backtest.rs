@@ -7,8 +7,9 @@ use uuid::Uuid;
 use crate::api::AppState;
 use crate::error::AppError;
 use crate::middleware::auth::CurrentUser;
-use crate::models::{BacktestJob, BacktestJobOut, BacktestResult, BacktestSubmit};
+use crate::models::{BacktestJob, BacktestJobOut, BacktestResult, BacktestSubmit, DailyBar, MinuteBar};
 use crate::queue::{BacktestPayload};
+use std::time::Instant;
 
 #[derive(Deserialize)]
 pub struct ListParams {
@@ -91,10 +92,46 @@ pub async fn submit_backtest(
 
     // 提前克隆需要的字段，避免 move 问题
     let symbols = payload.symbols.clone();
-    let strategy_code = payload.strategy_code.clone().unwrap_or_default();
     let start_date = payload.start_date.clone().unwrap_or_else(|| "2023-01-01".to_string());
+
+    // 当 strategy_id 存在但 strategy_code 为空时，从数据库查找策略代码
+    let strategy_code = if let Some(code) = payload.strategy_code.clone() {
+        code
+    } else if let Some(sid) = payload.strategy_id {
+        let strategy: Option<crate::models::Strategy> = sqlx::query_as(
+            "SELECT * FROM strategies WHERE id = $1 AND user_id = $2"
+        )
+        .bind(sid)
+        .bind(current_user.id)
+        .fetch_optional(&state.db)
+        .await?;
+        strategy.ok_or_else(|| AppError::NotFound("Strategy not found".to_string()))?.code
+    } else {
+        String::new()
+    };
     let end_date = payload.end_date.clone().unwrap_or_else(|| "2023-12-31".to_string());
-    let _params = payload.params.clone().unwrap_or(serde_json::json!({}));
+    // 合并策略的 params（包含 strategy_type 等）
+    let mut merged_params = payload.params.clone().unwrap_or(serde_json::json!({}));
+    if payload.strategy_id.is_some() && payload.strategy_code.is_none() {
+        if let Some(sid) = payload.strategy_id {
+            if let Ok(Some(strategy)) = sqlx::query_as::<_, crate::models::Strategy>(
+                "SELECT * FROM strategies WHERE id = $1 AND user_id = $2"
+            )
+            .bind(sid)
+            .bind(current_user.id)
+            .fetch_optional(&state.db)
+            .await
+            {
+                if let Some(obj) = merged_params.as_object_mut() {
+                    if let Some(strategy_obj) = strategy.params.as_object() {
+                        for (k, v) in strategy_obj {
+                            obj.entry(k.clone()).or_insert(v.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
     let initial_cash = payload.initial_cash.unwrap_or_else(|| rust_decimal::Decimal::from(1_000_000));
 
     // 检查回测配额（简化版，实际应查 subscription 表）
@@ -135,7 +172,9 @@ pub async fn submit_backtest(
     }
 
     let scope = payload.scope.unwrap_or_else(|| {
-        if symbols.len() == 1 {
+        if symbols.is_empty() {
+            "scan".to_string()
+        } else if symbols.len() == 1 {
             "single".to_string()
         } else {
             "multi".to_string()
@@ -143,8 +182,8 @@ pub async fn submit_backtest(
     });
 
     let job: BacktestJob = sqlx::query_as(
-        "INSERT INTO backtest_jobs (user_id, strategy_id, status, scope, symbols, start_date, end_date, initial_cash, params)
-         VALUES ($1, $2, 'pending', $3, $4, $5, $6, $7, $8) RETURNING *"
+        "INSERT INTO backtest_jobs (user_id, strategy_id, status, scope, symbols, start_date, end_date, initial_cash, params, period)
+         VALUES ($1, $2, 'pending', $3, $4, $5, $6, $7, $8, $9) RETURNING *"
     )
     .bind(current_user.id)
     .bind(payload.strategy_id)
@@ -153,7 +192,8 @@ pub async fn submit_backtest(
     .bind(payload.start_date.as_ref().and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok()))
     .bind(payload.end_date.as_ref().and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok()))
     .bind(initial_cash)
-    .bind(payload.params.unwrap_or(serde_json::json!({})))
+    .bind(merged_params)
+        .bind(payload.period.unwrap_or_else(|| "1d".to_string()))
     .fetch_one(&state.db)
     .await?;
 
@@ -168,6 +208,7 @@ pub async fn submit_backtest(
         initial_cash: job.initial_cash.to_string(),
         params: job.params.clone().unwrap_or(serde_json::json!({})),
         scope,
+        period: job.period.clone().unwrap_or_else(|| "1d".to_string()),
     };
 
     match state.queue.push_task("backtest", &backtest_payload).await {
@@ -260,6 +301,20 @@ pub async fn get_backtest_chart(
     Path(job_id): Path<Uuid>,
     Query(params): Query<ChartParams>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    let agg = params.agg.clone().unwrap_or_else(|| "auto".to_string());
+    let cache_key = format!("{}:{}", job_id, agg);
+
+    // 检查缓存（5 分钟有效期，避免重复查询 TimescaleDB 4s+ 的 chunk 规划开销）
+    {
+        let cache = state.chart_cache.read().await;
+        if let Some((ts, cached_value)) = cache.get(&cache_key) {
+            if ts.elapsed().as_secs() < 300 {
+                tracing::debug!("Chart cache hit for {}", cache_key);
+                return Ok(Json(cached_value.clone()));
+            }
+        }
+    }
+
     let job: BacktestJob = sqlx::query_as(
         "SELECT * FROM backtest_jobs WHERE id = $1 AND user_id = $2"
     )
@@ -272,12 +327,66 @@ pub async fn get_backtest_chart(
         return Err(AppError::BadRequest("Backtest not completed yet".to_string()));
     }
 
-    let mut equity_curve = vec![];
+    // 从报告文件一次性读取净值曲线 + K 线数据（worker 已预写入，无需查 TimescaleDB）
+    let report_path = safe_report_path(job.result_report_path.as_deref());
+    let mut equity_curve: Vec<serde_json::Value> = vec![];
+    let mut kline_bars: Vec<serde_json::Value> = vec![];
 
-    if let Some(path) = safe_report_path(job.result_report_path.as_deref()) {
+    if let Some(path) = report_path {
         if let Ok(content) = tokio::fs::read_to_string(&path).await {
             if let Ok(report) = serde_json::from_str::<serde_json::Value>(&content) {
                 equity_curve = report.get("equity_curve").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                // 优先从报告读取 K 线（worker 预写入）；兼容旧报告（无 kline_bars 字段）
+                if let Some(kb) = report.get("kline_bars").and_then(|v| v.as_array()) {
+                    kline_bars = kb.clone();
+                } else {
+                    // 旧报告 fallback：根据 period 选择查询 minute_bars 或 daily_bars
+                    let kline_symbol = job.symbols.as_ref().and_then(|s| s.first()).map(|s| s.split('.').next().unwrap_or(s).to_string());
+                    let job_period = job.period.as_deref().unwrap_or("1d");
+                    if let (Some(sym), Some(start_date), Some(end_date)) = (kline_symbol.as_deref(), &job.start_date, &job.end_date) {
+                        let start_str = start_date.format("%Y-%m-%d").to_string();
+                        let end_str = end_date.format("%Y-%m-%d").to_string();
+                        if job_period != "1d" {
+                            // 分钟线：从 minute_bars 查询
+                            let db_period = job_period.replace("min", "");
+                            if let Ok(rows) = sqlx::query_as::<_, MinuteBar>(
+                                "SELECT symbol, datetime, open, high, low, close, volume, amount
+                                 FROM minute_bars
+                                 WHERE symbol = $1
+                                   AND period = $4
+                                   AND datetime >= $2::date
+                                   AND datetime <= $3::date + interval '1 day'
+                                 ORDER BY datetime ASC"
+                            )
+                            .bind(sym)
+                            .bind(&start_str)
+                            .bind(&end_str)
+                            .bind(&db_period)
+                            .fetch_all(&state.ts_db)
+                            .await
+                            {
+                                kline_bars = rows.iter().filter_map(|bar| serde_json::to_value(bar).ok()).collect();
+                            }
+                        } else {
+                            if let Ok(rows) = sqlx::query_as::<_, DailyBar>(
+                                "SELECT symbol, datetime, open, high, low, close, volume, amount, pre_close, change_pct
+                                 FROM daily_bars
+                                 WHERE symbol = $1
+                                   AND datetime >= $2::date
+                                   AND datetime <= $3::date + interval '1 day'
+                                 ORDER BY datetime ASC"
+                            )
+                            .bind(sym)
+                            .bind(&start_str)
+                            .bind(&end_str)
+                            .fetch_all(&state.ts_db)
+                            .await
+                            {
+                                kline_bars = rows.iter().filter_map(|bar| serde_json::to_value(bar).ok()).collect();
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -285,13 +394,13 @@ pub async fn get_backtest_chart(
     if equity_curve.is_empty() {
         return Ok(Json(serde_json::json!({
             "points": [],
+            "kline_bars": kline_bars,
             "agg": params.agg.unwrap_or_else(|| "auto".to_string()),
         })));
     }
 
     let equity_len = equity_curve.len();
 
-    // 解析净值曲线并按周/月聚合
     let agg = params.agg.unwrap_or_else(|| {
         if equity_len > 3000 {
             "month".to_string()
@@ -303,7 +412,6 @@ pub async fn get_backtest_chart(
     });
 
     let points: Vec<serde_json::Value> = if agg == "week" || agg == "month" {
-        // 简化聚合：每 N 个点取一个
         let step = if agg == "month" { 22 } else { 5 };
         equity_curve
             .into_iter()
@@ -315,10 +423,24 @@ pub async fn get_backtest_chart(
         equity_curve
     };
 
-    Ok(Json(serde_json::json!({
+    let response = serde_json::json!({
         "points": points,
+        "kline_bars": kline_bars,
         "agg": agg,
-    })))
+    });
+
+    // 写入缓存
+    {
+        let mut cache = state.chart_cache.write().await;
+        cache.insert(cache_key, (Instant::now(), response.clone()));
+        // 清理过期缓存（保留最近 100 条）
+        if cache.len() > 100 {
+            let now = Instant::now();
+            cache.retain(|_, (ts, _)| now.duration_since(*ts).as_secs() < 300);
+        }
+    }
+
+    Ok(Json(response))
 }
 
 pub async fn get_backtest_trades(
@@ -368,6 +490,48 @@ pub async fn get_backtest_trades(
     })))
 }
 
+/// 删除回测记录（普通用户只能删自己的）
+pub async fn delete_backtest(
+    State(state): State<Arc<AppState>>,
+    current_user: CurrentUser,
+    Path(job_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    // 先查询获取报告文件路径，以便删除
+    let job: Option<BacktestJob> = sqlx::query_as(
+        "SELECT * FROM backtest_jobs WHERE id = $1 AND user_id = $2"
+    )
+    .bind(job_id)
+    .bind(current_user.id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let job = job.ok_or_else(|| AppError::NotFound("回测记录未找到或无权限删除".to_string()))?;
+
+    // 删除报告文件（如果存在）
+    if let Some(report_path) = safe_report_path(job.result_report_path.as_deref()) {
+        if report_path.exists() {
+            if let Err(e) = tokio::fs::remove_file(&report_path).await {
+                tracing::warn!("Failed to delete report file: {}", e);
+            }
+        }
+    }
+
+    // 删除数据库记录
+    let result = sqlx::query(
+        "DELETE FROM backtest_jobs WHERE id = $1 AND user_id = $2"
+    )
+    .bind(job_id)
+    .bind(current_user.id)
+    .execute(&state.db)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound("回测记录未找到或无权限删除".to_string()));
+    }
+
+    Ok(Json(serde_json::json!({"status": "deleted"})))
+}
+
 fn job_to_out(job: BacktestJob) -> BacktestJobOut {
     BacktestJobOut {
         id: job.id,
@@ -380,6 +544,7 @@ fn job_to_out(job: BacktestJob) -> BacktestJobOut {
         result_summary: job.result_summary,
         result_report_path: job.result_report_path,
         error_message: job.error_message,
+        period: job.period,
         created_at: job.created_at,
         completed_at: job.completed_at,
     }

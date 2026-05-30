@@ -209,7 +209,7 @@ impl Worker<BacktestPayload> for BacktestWorker {
         let payload = &task.payload;
         let job_id_str = payload.job_id.to_string();
 
-        info!("Processing backtest job: {}", job_id_str);
+        info!("Processing backtest job: {} scope={} symbols={}", job_id_str, payload.scope, payload.symbols.len());
 
         // 1. 更新状态为 running
         self.queue
