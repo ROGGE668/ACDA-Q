@@ -203,6 +203,7 @@ export interface BacktestResultSummary {
   total_signals?: number;
   scanned_count?: number;
   suitable_count?: number;
+  avg_annual_return?: number;
 }
 
 export interface MonthlyReturn {

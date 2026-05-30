@@ -384,12 +384,14 @@ impl Worker<BacktestPayload> for BacktestWorker {
                 monthly_returns: Vec::new(),
             };
 
+            let n = results.len().max(1) as u64;
             scan_summary = Some(json!({
-                "scanned_count": results.len(),
+                "scanned_count": symbols.len(),
                 "suitable_count": results.len(),
-                "avg_return": results.iter().map(|r| r.total_return).sum::<Decimal>() / Decimal::from(results.len().max(1) as u64),
-                "avg_sharpe": results.iter().map(|r| r.sharpe_ratio).sum::<Decimal>() / Decimal::from(results.len().max(1) as u64),
-                "avg_drawdown": results.iter().map(|r| r.max_drawdown).sum::<Decimal>() / Decimal::from(results.len().max(1) as u64),
+                "avg_return": results.iter().map(|r| r.total_return).sum::<Decimal>() / Decimal::from(n),
+                "avg_annual_return": results.iter().map(|r| r.annual_return).sum::<Decimal>() / Decimal::from(n),
+                "avg_sharpe": results.iter().map(|r| r.sharpe_ratio).sum::<Decimal>() / Decimal::from(n),
+                "avg_drawdown": results.iter().map(|r| r.max_drawdown).sum::<Decimal>() / Decimal::from(n),
                 "total_trades": results.iter().map(|r| r.total_trades).sum::<u64>(),
             }));
             (perf, Some(results))

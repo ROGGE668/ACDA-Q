@@ -404,7 +404,7 @@ export default function BacktestResultPage() {
           <h3>绩效摘要</h3>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "1rem", marginTop: "0.75rem" }}>
             <Metric label="总收益" value={`${(Number(summary.total_return ?? 0) * 100).toFixed(2)}%`} color={Number(summary.total_return ?? 0) >= 0 ? "#22c55e" : "#ef4444"} />
-            <Metric label="年化收益" value={`${(Number(summary.annual_return ?? 0) * 100).toFixed(2)}%`} />
+            <Metric label="年化收益" value={`${(Number(summary.avg_annual_return ?? summary.annual_return ?? 0) * 100).toFixed(2)}%`} />
             <Metric label="最大回撤" value={`${(Number(summary.max_drawdown ?? 0) * 100).toFixed(2)}%`} color="#ef4444" />
             <Metric label="夏普比率" value={Number(summary.sharpe_ratio ?? 0).toFixed(2)} />
             <Metric label="索提诺比率" value={Number(summary.sortino_ratio ?? 0).toFixed(2)} />

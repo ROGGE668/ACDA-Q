@@ -339,6 +339,8 @@ class MockContext:
 
 
 def execute_strategy(code, bars, initial_cash, period="1d"):
+    if bars is None or bars.empty or "datetime" not in bars.columns:
+        return [], []
     # 规范化代码缩进：移除公共前导空格 + 首尾空白
     # 防止用户保存代码时意外引入前导空格导致 SyntaxError
     code = textwrap.dedent(code).strip()
@@ -522,6 +524,8 @@ def handle_request(params):
                 bars = load_daily_bars(symbols, start_date, end_date)
         else:
             bars = load_daily_bars(symbols, start_date, end_date)
+        if bars is None or bars.empty or "datetime" not in bars.columns:
+            return {"status": "error", "result": None, "error": "所选标的在该时间范围内没有数据", "traceback": None}
         trades, equity_curve = execute_strategy(code, bars, initial_cash, period)
         perf = compute_performance(trades, initial_cash, equity_curve)
         perf["equity_curve"] = equity_curve

@@ -15,9 +15,11 @@ pub struct ScanResultItem {
     pub name: String,
     pub score: Decimal,
     pub total_return: Decimal,
+    pub annual_return: Decimal,
     pub sharpe_ratio: Decimal,
     pub max_drawdown: Decimal,
     pub total_trades: u64,
+    pub final_value: Decimal,
 }
 
 /// 扫描全市场标的（通过 Python 沙箱批量执行用户策略）
@@ -81,9 +83,11 @@ pub async fn scan_market(
             let symbol = item.get("symbol").and_then(|v| v.as_str()).unwrap_or("").to_string();
             let score = item.get("score").and_then(|v| v.as_f64()).unwrap_or(0.0);
             let total_return = item.get("total_return").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let annual_return = item.get("annual_return").and_then(|v| v.as_f64()).unwrap_or(0.0);
             let sharpe = item.get("sharpe_ratio").and_then(|v| v.as_f64()).unwrap_or(0.0);
             let dd = item.get("max_drawdown").and_then(|v| v.as_f64()).unwrap_or(0.0);
             let trades = item.get("total_trades").and_then(|v| v.as_u64()).unwrap_or(0);
+            let final_value = item.get("final_value").and_then(|v| v.as_f64()).unwrap_or(0.0);
 
             let score_dec = Decimal::from_f64_retain(score).unwrap_or(dec!(0));
             if score_dec >= score_threshold {
@@ -92,18 +96,21 @@ pub async fn scan_market(
                     name: name_map.get(&symbol).cloned().unwrap_or_default(),
                     score: score_dec,
                     total_return: Decimal::from_f64_retain(total_return).unwrap_or(dec!(0)),
+                    annual_return: Decimal::from_f64_retain(annual_return).unwrap_or(dec!(0)),
                     sharpe_ratio: Decimal::from_f64_retain(sharpe).unwrap_or(dec!(0)),
                     max_drawdown: Decimal::from_f64_retain(dd).unwrap_or(dec!(0)),
                     total_trades: trades,
+                    final_value: Decimal::from_f64_retain(final_value).unwrap_or(dec!(0)),
                 });
             }
         }
     }
 
+    let total_scanned = results.len();
     results.sort_by(|a, b| b.score.cmp(&a.score));
     results.truncate(top_n);
 
-    info!("Scan complete: {} suitable stocks out of {}", results.len(), symbols.len());
+    info!("Scan complete: {} suitable stocks out of {} scanned", results.len(), total_scanned);
     Ok(results)
 }
 
