@@ -403,9 +403,45 @@ def bars_from_rows(rows):
     return df
 
 
+def _scan_one_stock(args):
+    """单只标的扫描（供并行调用）"""
+    symbol, bars_df, code, initial_cash, period, years = args
+    try:
+        if bars_df.empty or len(bars_df) < 20:
+            return None
+        trades, equity_curve = execute_strategy(code, bars_df, initial_cash, period)
+        perf = compute_performance(trades, initial_cash, equity_curve)
+
+        raw_sharpe = float(perf.get("sharpe_ratio", 0))
+        raw_return = float(perf.get("total_return", 0))
+        raw_dd = abs(float(perf.get("max_drawdown", 0)))
+        sharpe_pts = max(0, min(100, (raw_sharpe + 2) / 7 * 100))
+        return_pts = max(0, min(100, (raw_return + 0.5) / 2.5 * 100))
+        dd_pts = max(0, min(100, (1 - raw_dd / 0.5) * 100))
+        score = sharpe_pts * 0.4 + return_pts * 0.4 + dd_pts * 0.2
+
+        _annual_ret = (1 + raw_return) ** (1 / years) - 1 if raw_return > -1 else -1.0
+
+        return {
+            "symbol": symbol,
+            "score": round(score, 4),
+            "total_return": round(raw_return, 6),
+            "annual_return": round(_annual_ret, 6),
+            "sharpe_ratio": round(raw_sharpe, 4),
+            "max_drawdown": round(float(perf.get("max_drawdown", 0)), 6),
+            "total_trades": int(perf.get("total_trades", 0)),
+            "final_value": float(perf.get("final_value", 0)),
+        }
+    except Exception:
+        return None
+
+
 def handle_batch_scan(params):
-    """批量扫描：对多只标的运行策略，返回每只的绩效（分块处理避免内存溢出）"""
+    """批量扫描：多进程并行执行策略，返回每只的绩效"""
     from datetime import datetime as _dt
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+    import os
+
     code = params.get("code", "")
     symbols = params.get("symbols", [])
     start_date = params.get("start_date", "2024-01-01")
@@ -416,63 +452,43 @@ def handle_batch_scan(params):
     if not symbols or not code.strip():
         return {"status": "error", "error": "Missing symbols or code"}
 
-    # 计算年数用于年化
     try:
         _s = _dt.strptime(start_date, "%Y-%m-%d")
         _e = _dt.strptime(end_date, "%Y-%m-%d")
-        _years = max((_e - _s).days / 365.25, 0.01)
+        years = max((_e - _s).days / 365.25, 0.01)
     except Exception:
-        _years = 1.0
+        years = 1.0
 
+    # 批量加载所有标的日线数据
+    try:
+        if period == "1d" or period == "":
+            all_bars = load_daily_bars(symbols, start_date, end_date)
+        else:
+            db_period = period.replace("min", "")
+            all_bars = load_minute_bars(symbols, start_date, end_date, db_period)
+            if all_bars.empty:
+                all_bars = load_daily_bars(symbols, start_date, end_date)
+    except Exception:
+        return {"status": "success", "results": []}
+
+    if all_bars.empty:
+        return {"status": "success", "results": []}
+
+    # 准备每只标的的参数
+    tasks = []
+    for symbol in symbols:
+        bars = all_bars[all_bars["symbol"] == symbol] if "symbol" in all_bars.columns else pd.DataFrame()
+        tasks.append((symbol, bars, code, initial_cash, period, years))
+
+    # 多进程并行执行（最多 CPU 核数 或 8 个进程）
+    max_workers = min(os.cpu_count() or 4, 8)
     results = []
-    CHUNK = 500
-
-    for ci in range(0, len(symbols), CHUNK):
-        chunk = symbols[ci:ci + CHUNK]
-        try:
-            if period == "1d" or period == "":
-                chunk_bars = load_daily_bars(chunk, start_date, end_date)
-            else:
-                db_period = period.replace("min", "")
-                chunk_bars = load_minute_bars(chunk, start_date, end_date, db_period)
-                if chunk_bars.empty:
-                    chunk_bars = load_daily_bars(chunk, start_date, end_date)
-        except Exception:
-            continue
-        if chunk_bars.empty:
-            continue
-
-        for symbol in chunk:
-            try:
-                bars = chunk_bars[chunk_bars["symbol"] == symbol] if "symbol" in chunk_bars.columns else pd.DataFrame()
-                if bars.empty or len(bars) < 20:
-                    continue
-                trades, equity_curve = execute_strategy(code, bars, initial_cash, period)
-                perf = compute_performance(trades, initial_cash, equity_curve)
-
-                raw_sharpe = float(perf.get("sharpe_ratio", 0))
-                raw_return = float(perf.get("total_return", 0))
-                raw_dd = abs(float(perf.get("max_drawdown", 0)))
-                sharpe_pts = max(0, min(100, (raw_sharpe + 2) / 7 * 100))
-                return_pts = max(0, min(100, (raw_return + 0.5) / 2.5 * 100))
-                dd_pts = max(0, min(100, (1 - raw_dd / 0.5) * 100))
-                score = sharpe_pts * 0.4 + return_pts * 0.4 + dd_pts * 0.2
-
-                _total_ret = float(perf.get("total_return", 0))
-                _annual_ret = (1 + _total_ret) ** (1 / _years) - 1 if _total_ret > -1 else -1.0
-
-                results.append({
-                    "symbol": symbol,
-                    "score": round(score, 4),
-                    "total_return": round(_total_ret, 6),
-                    "annual_return": round(_annual_ret, 6),
-                    "sharpe_ratio": round(raw_sharpe, 4),
-                    "max_drawdown": round(float(perf.get("max_drawdown", 0)), 6),
-                    "total_trades": int(perf.get("total_trades", 0)),
-                    "final_value": float(perf.get("final_value", 0)),
-                })
-            except Exception:
-                continue
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_scan_one_stock, t): t[0] for t in tasks}
+        for future in as_completed(futures):
+            r = future.result()
+            if r is not None:
+                results.append(r)
 
     results.sort(key=lambda x: x["score"], reverse=True)
     return {"status": "success", "results": results}
