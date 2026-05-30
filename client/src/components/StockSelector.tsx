@@ -45,29 +45,32 @@ export default function StockSelector({
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <label style={{ fontSize: "0.875rem", color: "var(--muted)" }}>
-          {fullMarketScan
-            ? "全市场扫描（按市值Top500）"
-            : `选择标的（已选 ${selectedStocks.length} 只）`}
-        </label>
+      <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "0.5rem" }}>
         <label
+          onClick={() => onFullMarketScanChange(!fullMarketScan)}
           style={{
-            fontSize: "0.875rem",
-            color: "var(--muted)",
-            display: "flex",
+            display: "inline-flex",
             alignItems: "center",
-            gap: "0.25rem",
+            gap: "0.5rem",
+            padding: "0.375rem 0.75rem",
+            borderRadius: "0.375rem",
+            border: fullMarketScan ? "1px solid var(--primary, #6366f1)" : "1px solid var(--border)",
+            background: fullMarketScan ? "var(--primary, #6366f1)" : "transparent",
+            color: fullMarketScan ? "#fff" : "var(--muted)",
+            fontSize: "0.8125rem",
             cursor: "pointer",
+            transition: "all 0.15s",
+            whiteSpace: "nowrap" as const,
           }}
         >
-          <input
-            type="checkbox"
-            checked={fullMarketScan}
-            onChange={(e) => onFullMarketScanChange(e.target.checked)}
-          />
+          <span style={{ width: 14, height: 14, border: fullMarketScan ? "none" : "1.5px solid var(--muted)", borderRadius: 3, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "0.7rem", background: fullMarketScan ? "rgba(255,255,255,0.25)" : "transparent" }}>
+            {fullMarketScan ? "✓" : ""}
+          </span>
           全市场扫描
         </label>
+        <span style={{ fontSize: "0.8125rem", color: "var(--muted)" }}>
+          {fullMarketScan ? "按市值Top500扫描" : `已选 ${selectedStocks.length} 只标的`}
+        </span>
       </div>
       <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem" }}>
         <select
