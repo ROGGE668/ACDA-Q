@@ -35,6 +35,32 @@ class _SafePandas:
 
 _SAFE_PANDAS = _SafePandas()
 
+# 允许导入的模块白名单
+_SAFE_IMPORT_MODULES = {
+    'math', 'datetime', 'decimal', 'fractions', 'random',
+    'collections', 'itertools', 'functools', 'operator',
+    're', 'string', 'textwrap', 'unicodedata', 'quant_engine',
+}
+
+def _safe_import(name, *args, **kwargs):
+    """限制 import 只允许白名单中的模块"""
+    top = name.split('.')[0]
+    if top in _SAFE_IMPORT_MODULES:
+        return __import__(name, *args, **kwargs)
+    raise ImportError(f"Import of '{name}' is not allowed in strategy sandbox")
+
+def _safe_open(*args, **kwargs):
+    """阻止文件操作"""
+    raise OSError("File access is disabled in strategy sandbox")
+
+def _safe_exec(code, globals=None, locals=None):
+    """阻止 exec 嵌套调用"""
+    raise RuntimeError("Nested exec is not allowed in strategy sandbox")
+
+def _safe_eval(expr, globals=None, locals=None):
+    """阻止 eval 调用"""
+    raise RuntimeError("eval is not allowed in strategy sandbox")
+
 _SAFE_BUILTINS = {
     name: getattr(_builtins, name)
     for name in [
@@ -47,6 +73,11 @@ _SAFE_BUILTINS = {
     ]
     if hasattr(_builtins, name)
 }
+# 安全的受限函数
+_SAFE_BUILTINS['__import__'] = _safe_import
+_SAFE_BUILTINS['open'] = _safe_open
+_SAFE_BUILTINS['exec'] = _safe_exec
+_SAFE_BUILTINS['eval'] = _safe_eval
 
 # 优先从 ACDA_Q__TIMESCALE_DATABASE_URL 解析，否则用单独的环境变量
 _ts_url = os.environ.get("ACDA_Q__TIMESCALE_DATABASE_URL", "")
@@ -73,7 +104,8 @@ def _get_engine():
     global _engine
     if _engine is None:
         from sqlalchemy import create_engine
-        url = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+        from sqlalchemy import URL
+        url = URL.create("postgresql", username=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT, database=DB_NAME)
         _engine = create_engine(url, pool_size=2, max_overflow=0, pool_pre_ping=True)
     return _engine
 
@@ -102,6 +134,12 @@ def _warmup():
         pass
 
 _warmup()
+
+
+def _compile_strategy(code_str):
+    """Pre-compile strategy code for reuse across multiple stocks"""
+    code_str = textwrap.dedent(code_str).strip()
+    return compile(code_str, "<strategy>", "exec")
 
 
 def load_daily_bars(symbols, start_date, end_date):
@@ -338,14 +376,22 @@ class MockContext:
         return lambda *a, **kw: None
 
 
-def execute_strategy(code, bars, initial_cash, period="1d"):
+def execute_strategy(code_input, bars, initial_cash, period="1d"):
     if bars is None or bars.empty or "datetime" not in bars.columns:
         return [], []
-    # 规范化代码缩进：移除公共前导空格 + 首尾空白
-    # 防止用户保存代码时意外引入前导空格导致 SyntaxError
-    code = textwrap.dedent(code).strip()
-    local_ns = {"pd": _SAFE_PANDAS, "datetime": datetime, "print": lambda *a: None, "BaseStrategy": object, "__builtins__": _SAFE_BUILTINS, "__name__": "__main__"}
-    exec(code, local_ns)
+    # Accept both string and pre-compiled code
+    if isinstance(code_input, str):
+        compiled = _compile_strategy(code_input)
+    else:
+        compiled = code_input
+    # 注入假 quant_engine 模块（AI 生成代码的约定导入名）
+    import types as _types
+    import sys as _sys
+    _fake_qe = _types.ModuleType("quant_engine")
+    _fake_qe.BaseStrategy = object
+    _sys.modules["quant_engine"] = _fake_qe
+    local_ns = {"pd": _SAFE_PANDAS, "datetime": datetime, "math": __import__("math"), "print": lambda *a, **kw: print(*a, file=sys.stderr, **kw), "BaseStrategy": object, "quant_engine": _fake_qe, "__builtins__": _SAFE_BUILTINS, "__name__": "__main__"}
+    exec(compiled, local_ns)
     sc = None
     for name, obj in local_ns.items():
         if isinstance(obj, type) and hasattr(obj, "on_bar") and name != "BaseStrategy":
@@ -405,45 +451,48 @@ def bars_from_rows(rows):
     return df
 
 
-def _scan_one_stock(args):
-    """单只标的扫描（供线程池并行调用）"""
-    symbol, bars_df, code, initial_cash, period, years = args
+def _mp_scan_batch(args):
+    """Worker function for multiprocessing pool - each process loads data independently"""
+    symbols_chunk, code, start_date, end_date, initial_cash, period, years = args
     try:
-        if bars_df.empty or len(bars_df) < 20:
-            return None
-        trades, equity_curve = execute_strategy(code, bars_df, initial_cash, period)
-        perf = compute_performance(trades, initial_cash, equity_curve)
-
-        raw_sharpe = float(perf.get("sharpe_ratio", 0))
-        raw_return = float(perf.get("total_return", 0))
-        raw_dd = abs(float(perf.get("max_drawdown", 0)))
-        sharpe_pts = max(0, min(100, (raw_sharpe + 2) / 7 * 100))
-        return_pts = max(0, min(100, (raw_return + 0.5) / 2.5 * 100))
-        dd_pts = max(0, min(100, (1 - raw_dd / 0.5) * 100))
-        score = sharpe_pts * 0.4 + return_pts * 0.4 + dd_pts * 0.2
-
-        _annual_ret = (1 + raw_return) ** (1 / years) - 1 if raw_return > -1 else -1.0
-
-        return {
-            "symbol": symbol,
-            "score": round(score, 4),
-            "total_return": round(raw_return, 6),
-            "annual_return": round(_annual_ret, 6),
-            "sharpe_ratio": round(raw_sharpe, 4),
-            "max_drawdown": round(float(perf.get("max_drawdown", 0)), 6),
-            "total_trades": int(perf.get("total_trades", 0)),
-            "final_value": float(perf.get("final_value", 0)),
-        }
+        bars = load_daily_bars(symbols_chunk, start_date, end_date)
+        if bars.empty:
+            return []
+        compiled = _compile_strategy(code)
+        results = []
+        for sym in symbols_chunk:
+            sym_bars = bars[bars["symbol"] == sym] if "symbol" in bars.columns else bars
+            if sym_bars.empty or len(sym_bars) < 20:
+                continue
+            try:
+                trades, equity_curve = execute_strategy(compiled, sym_bars, initial_cash, period)
+                perf = compute_performance(trades, initial_cash, equity_curve)
+                raw_sharpe = float(perf.get("sharpe_ratio", 0))
+                raw_return = float(perf.get("total_return", 0))
+                raw_dd = abs(float(perf.get("max_drawdown", 0)))
+                sharpe_pts = max(0, min(100, (raw_sharpe + 2) / 7 * 100))
+                return_pts = max(0, min(100, (raw_return + 0.5) / 2.5 * 100))
+                dd_pts = max(0, min(100, (1 - raw_dd / 0.5) * 100))
+                score = sharpe_pts * 0.4 + return_pts * 0.4 + dd_pts * 0.2
+                _annual_ret = (1 + raw_return) ** (1 / years) - 1 if raw_return > -1 else -1.0
+                results.append({
+                    "symbol": sym, "score": round(score, 4),
+                    "total_return": round(raw_return, 6), "annual_return": round(_annual_ret, 6),
+                    "sharpe_ratio": round(raw_sharpe, 4), "max_drawdown": round(raw_dd, 6),
+                    "total_trades": int(perf.get("total_trades", 0)),
+                    "final_value": float(perf.get("final_value", 0)),
+                })
+            except Exception:
+                continue
+        return results
     except Exception:
-        return None
+        return []
 
 
 def handle_batch_scan(params):
-    """批量扫描：线程池并行执行策略，返回每只的绩效"""
-    from datetime import datetime as _dt
-    import multiprocessing as _mp
-    from concurrent.futures import ProcessPoolExecutor, as_completed
-    import os
+    """批量扫描：使用 multiprocessing 绕过 GIL 实现真正并行"""
+    import multiprocessing as mp
+    from multiprocessing import get_context
 
     code = params.get("code", "")
     symbols = params.get("symbols", [])
@@ -456,50 +505,85 @@ def handle_batch_scan(params):
         return {"status": "error", "error": "Missing symbols or code"}
 
     try:
-        _s = _dt.strptime(start_date, "%Y-%m-%d")
-        _e = _dt.strptime(end_date, "%Y-%m-%d")
+        _s = datetime.strptime(start_date, "%Y-%m-%d")
+        _e = datetime.strptime(end_date, "%Y-%m-%d")
         years = max((_e - _s).days / 365.25, 0.01)
     except Exception:
         years = 1.0
 
-    # 批量加载所有标的日线数据
-    try:
-        if period == "1d" or period == "":
-            all_bars = load_daily_bars(symbols, start_date, end_date)
-        else:
-            db_period = period.replace("min", "")
-            all_bars = load_minute_bars(symbols, start_date, end_date, db_period)
-            if all_bars.empty:
-                all_bars = load_daily_bars(symbols, start_date, end_date)
-    except Exception:
-        return {"status": "success", "results": []}
+    total = len(symbols)
+    print(json.dumps({"progress": 0, "total": total, "msg": f"开始扫描 {total} 只标的"}), file=sys.stderr, flush=True)
 
-    if all_bars.empty:
-        return {"status": "success", "results": []}
+    # 小批量直接单进程处理（避免 multiprocessing 启动开销）
+    if total <= 50:
+        bars = load_daily_bars(symbols, start_date, end_date)
+        if bars.empty:
+            return {"status": "success", "results": []}
+        compiled = _compile_strategy(code)
+        all_results = []
+        for sym in symbols:
+            sym_bars = bars[bars["symbol"] == sym] if "symbol" in bars.columns else bars
+            if sym_bars.empty or len(sym_bars) < 20:
+                continue
+            try:
+                trades, equity_curve = execute_strategy(compiled, sym_bars, initial_cash, period)
+                perf = compute_performance(trades, initial_cash, equity_curve)
+                raw_sharpe = float(perf.get("sharpe_ratio", 0))
+                raw_return = float(perf.get("total_return", 0))
+                raw_dd = abs(float(perf.get("max_drawdown", 0)))
+                sharpe_pts = max(0, min(100, (raw_sharpe + 2) / 7 * 100))
+                return_pts = max(0, min(100, (raw_return + 0.5) / 2.5 * 100))
+                dd_pts = max(0, min(100, (1 - raw_dd / 0.5) * 100))
+                score = sharpe_pts * 0.4 + return_pts * 0.4 + dd_pts * 0.2
+                _annual_ret = (1 + raw_return) ** (1 / years) - 1 if raw_return > -1 else -1.0
+                all_results.append({
+                    "symbol": sym, "score": round(score, 4),
+                    "total_return": round(raw_return, 6), "annual_return": round(_annual_ret, 6),
+                    "sharpe_ratio": round(raw_sharpe, 4), "max_drawdown": round(raw_dd, 6),
+                    "total_trades": int(perf.get("total_trades", 0)),
+                    "final_value": float(perf.get("final_value", 0)),
+                })
+            except Exception:
+                continue
+        all_results.sort(key=lambda x: x["score"], reverse=True)
+        return {"status": "success", "results": all_results}
 
-    # 预按标的分组，避免 worker 内重复过滤
-    symbol_groups = {}
-    if "symbol" in all_bars.columns:
-        for sym, grp in all_bars.groupby("symbol"):
-            symbol_groups[sym] = grp.copy()
-    tasks = []
-    for symbol in symbols:
-        bars = symbol_groups.get(symbol, pd.DataFrame())
-        tasks.append((symbol, bars, code, initial_cash, period, years))
+    # 大批量：使用 multiprocessing 并行（绕过 GIL）
+    num_workers = min(mp.cpu_count() or 4, 12)
+    chunk_size = max(1, (total + num_workers - 1) // num_workers)
+    chunks = [symbols[i:i + chunk_size] for i in range(0, total, chunk_size)]
 
-    # 多进程并行执行（spawn 模式避免 fork 兼容性问题）
-    max_workers = min(os.cpu_count() or 4, 8)
-    ctx = _mp.get_context("spawn")
-    results = []
-    with ProcessPoolExecutor(max_workers=max_workers, mp_context=ctx) as executor:
-        futures = {executor.submit(_scan_one_stock, t): t[0] for t in tasks}
-        for future in as_completed(futures):
-            r = future.result()
-            if r is not None:
-                results.append(r)
+    print(json.dumps({"progress": 5, "total": total, "msg": f"分配 {len(chunks)} 个并行任务到 {num_workers} 进程"}), file=sys.stderr, flush=True)
 
-    results.sort(key=lambda x: x["score"], reverse=True)
-    return {"status": "success", "results": results}
+    worker_args = [(chunk, code, start_date, end_date, initial_cash, period, years) for chunk in chunks]
+
+    import time as _time
+    t_start = _time.time()
+    ctx = get_context("spawn")
+    all_results = []
+    with ctx.Pool(processes=num_workers) as pool:
+        results_iter = pool.imap_unordered(_mp_scan_batch, worker_args)
+        done = 0
+        for batch_results in results_iter:
+            all_results.extend(batch_results)
+            done += 1
+            elapsed = _time.time() - t_start
+            eta = elapsed / done * (len(chunks) - done) if done > 0 else 0
+            pct = int(done / len(chunks) * 100)
+            print(json.dumps({
+                "progress": pct, "total": total, "done_batches": done,
+                "total_batches": len(chunks), "elapsed": round(elapsed, 1),
+                "eta_seconds": round(eta, 1),
+                "msg": f"扫描中 {done}/{len(chunks)} 批次 ({len(all_results)} 只有结果)"
+            }), file=sys.stderr, flush=True)
+
+    elapsed_total = round(_time.time() - t_start, 1)
+    print(json.dumps({"progress": 100, "total": total, "count": len(all_results),
+                       "elapsed": elapsed_total, "eta_seconds": 0,
+                       "msg": f"扫描完成: {len(all_results)} 只标的有结果, 耗时 {elapsed_total}s"}), file=sys.stderr, flush=True)
+
+    all_results.sort(key=lambda x: x["score"], reverse=True)
+    return {"status": "success", "results": all_results}
 
 
 def handle_request(params):

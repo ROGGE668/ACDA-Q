@@ -24,6 +24,25 @@ export default function BacktestResultPage() {
   const [fSharpe, setFSharpe] = useState("");
   const [fTrades, setFTrades] = useState("");
 
+  // 排序状态
+  type SortKey = "score" | "total_return" | "annual_return" | "max_drawdown" | "sharpe_ratio" | "total_trades";
+  const [sortKey, setSortKey] = useState<SortKey>("score");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDir(d => d === "desc" ? "asc" : "desc");
+    } else {
+      setSortKey(key);
+      setSortDir("desc");
+    }
+  };
+
+  const sortIcon = (key: SortKey) => {
+    if (sortKey !== key) return <span style={{ opacity: 0.3, marginLeft: 2 }}>⇅</span>;
+    return <span style={{ marginLeft: 2 }}>{sortDir === "desc" ? "▼" : "▲"}</span>;
+  };
+
   // WebSocket ref
   const wsRef = useRef<WebSocket | null>(null);
   const fallbackPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -36,6 +55,9 @@ export default function BacktestResultPage() {
   // 跟踪 result 是否已加载（用于轮询闭包）
   const resultLoadedRef = useRef(false);
   const [chartLoading, setChartLoading] = useState(true);
+
+  // 扫描进度 + ETA
+  const [scanProgress, setScanProgress] = useState<{message: string; elapsed: number; eta: number; pct: number} | null>(null);
 
   // Load initial job + fallback poll
   useEffect(() => {
@@ -72,6 +94,9 @@ export default function BacktestResultPage() {
       backtestAPI.get(id).then((res) => {
         setJob(res.data);
         if (res.data.period) setPeriod(res.data.period);
+        if (res.data.status === "success") {
+          setScanProgress(null);
+        }
         if (res.data.status === "success" && !resultLoadedRef.current) {
           resultLoadedRef.current = true;
           setChartLoading(true);
@@ -145,16 +170,28 @@ export default function BacktestResultPage() {
                 if (msg.period) setPeriod(msg.period);
                 return updated;
               });
-              if (msg.status === "success" && !resultLoadedRef.current) {
-                resultLoadedRef.current = true;
-                Promise.allSettled([
-                  backtestAPI.result(id).then(r => setResult(r.data)),
-                  backtestAPI.chart(id, "auto").then((r: any) => {
-                    setEquityPoints(r.data?.points || []);
-                    setKlineData(r.data?.kline_bars || []);
-                  }),
-                  backtestAPI.trades(id, 1, 50).then(r => { setTradesData(r.data); setTradesPage(1); }),
-                ]).catch(e => console.error("Parallel WS load failed:", e));
+              // 解析扫描进度 + ETA
+              if (msg.progress !== undefined && msg.status === "running") {
+                setScanProgress({
+                  message: msg.message || "",
+                  elapsed: msg.elapsed_secs || 0,
+                  eta: msg.eta_secs || 0,
+                  pct: msg.progress || 0,
+                });
+              }
+              if (msg.status === "success") {
+                setScanProgress(null);
+                if (!resultLoadedRef.current) {
+                  resultLoadedRef.current = true;
+                  Promise.allSettled([
+                    backtestAPI.result(id).then(r => setResult(r.data)),
+                    backtestAPI.chart(id, "auto").then((r: any) => {
+                      setEquityPoints(r.data?.points || []);
+                      setKlineData(r.data?.kline_bars || []);
+                    }),
+                    backtestAPI.trades(id, 1, 50).then(r => { setTradesData(r.data); setTradesPage(1); }),
+                  ]).catch(e => console.error("Parallel WS load failed:", e));
+                }
               }
             }
           } catch (e) {
@@ -238,6 +275,13 @@ export default function BacktestResultPage() {
     return true;
   });
 
+  // 排序后的结果
+  const sortedStocks = [...filteredStocks].sort((a, b) => {
+    const va = Number(a[sortKey] ?? 0);
+    const vb = Number(b[sortKey] ?? 0);
+    return sortDir === "desc" ? vb - va : va - vb;
+  });
+
   // Trade markers for K-line
   const allTrades = (result?.trades || []).map((t: any) => ({
     ...t,
@@ -297,6 +341,21 @@ export default function BacktestResultPage() {
           <div><strong>最终市值:</strong> {summary.final_value?.toLocaleString() ?? "--"}</div>
         </div>
         {job.error_message && <p style={{ color: "#ef4444", marginTop: "0.5rem" }}>错误: {job.error_message}</p>}
+        {(job.status === "running" || job.status === "pending") && scanProgress && scanProgress.eta > 0 && (
+          <div style={{ marginTop: "0.75rem", padding: "0.75rem 1rem", background: "var(--bg-secondary, #f8fafc)", borderRadius: "8px", border: "1px solid var(--border, #e2e8f0)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
+              <span style={{ fontWeight: 600, color: "var(--text, #1e293b)" }}>{scanProgress.message}</span>
+              <div style={{ flex: 1, minWidth: 200, height: 6, background: "var(--border, #e2e8f0)", borderRadius: 3, overflow: "hidden" }}>
+                <div style={{ width: `${Math.min(scanProgress.pct, 100)}%`, height: "100%", background: "linear-gradient(90deg, #3b82f6, #60a5fa)", borderRadius: 3, transition: "width 0.3s ease" }} />
+              </div>
+              <span style={{ fontSize: "0.85rem", color: "var(--muted, #64748b)", whiteSpace: "nowrap" }}>
+                {scanProgress.elapsed > 0 && `已用 ${Math.floor(scanProgress.elapsed / 60)}分${Math.floor(scanProgress.elapsed % 60)}秒`}
+                {scanProgress.elapsed > 0 && scanProgress.eta > 0 && " · "}
+                {scanProgress.eta > 0 && `预计剩余 ${Math.floor(scanProgress.eta / 60)}分${Math.floor(scanProgress.eta % 60)}秒`}
+              </span>
+            </div>
+          </div>
+        )}
       </div>
 
       {isScan && summary.avg_return !== undefined && (
@@ -318,9 +377,9 @@ export default function BacktestResultPage() {
       {isScan && suitableStocks.length > 0 && (
         <div className="card" style={{ marginTop: "1rem" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
-            <h3 style={{ margin: 0 }}>扫描结果 {filteredStocks.length}/{suitableStocks.length}</h3>
+            <h3 style={{ margin: 0 }}>扫描结果 {sortedStocks.length}/{suitableStocks.length}</h3>
             <span style={{ fontSize: "0.75rem", color: "var(--muted)" }}>
-              按综合评分排序 | 评分 = 夏普×0.4 + 收益×0.4 − 回撤×0.2
+              点击列标题排序 | 评分 = 夏普×0.4 + 收益×0.4 − 回撤×0.2
             </span>
           </div>
           <div style={{ maxHeight: 500, overflow: "auto" }}>
@@ -330,12 +389,12 @@ export default function BacktestResultPage() {
                   <th style={{ padding: "0.375rem 0.5rem", width: 40 }}>#</th>
                   <th style={{ padding: "0.375rem 0.5rem" }}>代码</th>
                   <th style={{ padding: "0.375rem 0.5rem" }}>名称</th>
-                  <th style={{ padding: "0.375rem 0.5rem", textAlign: "right" }}>评分</th>
-                  <th style={{ padding: "0.375rem 0.5rem", textAlign: "right" }}>总收益</th>
-                  <th style={{ padding: "0.375rem 0.5rem", textAlign: "right" }}>年化</th>
-                  <th style={{ padding: "0.375rem 0.5rem", textAlign: "right" }}>最大回撤</th>
-                  <th style={{ padding: "0.375rem 0.5rem", textAlign: "right" }}>夏普</th>
-                  <th style={{ padding: "0.375rem 0.5rem", textAlign: "right" }}>交易次数</th>
+                  <th style={{ padding: "0.375rem 0.5rem", textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => toggleSort("score")}>评分{sortIcon("score")}</th>
+                  <th style={{ padding: "0.375rem 0.5rem", textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => toggleSort("total_return")}>总收益{sortIcon("total_return")}</th>
+                  <th style={{ padding: "0.375rem 0.5rem", textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => toggleSort("annual_return")}>年化{sortIcon("annual_return")}</th>
+                  <th style={{ padding: "0.375rem 0.5rem", textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => toggleSort("max_drawdown")}>最大回撤{sortIcon("max_drawdown")}</th>
+                  <th style={{ padding: "0.375rem 0.5rem", textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => toggleSort("sharpe_ratio")}>夏普{sortIcon("sharpe_ratio")}</th>
+                  <th style={{ padding: "0.375rem 0.5rem", textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => toggleSort("total_trades")}>交易次数{sortIcon("total_trades")}</th>
                 </tr>
                 <tr style={{ borderBottom: "1px solid var(--border)", fontSize: "0.75rem" }}>
                   <th style={{ padding: "0.25rem 0.5rem" }}></th>
@@ -350,7 +409,7 @@ export default function BacktestResultPage() {
                 </tr>
               </thead>
               <tbody>
-                {filteredStocks.map((s: SuitableStock, i: number) => (
+                {sortedStocks.map((s: SuitableStock, i: number) => (
                   <tr key={i} style={{ borderBottom: "1px solid var(--border)", background: i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.02)" }}>
                     <td style={{ padding: "0.375rem 0.5rem", color: "var(--muted)" }}>{i + 1}</td>
                     <td style={{ padding: "0.375rem 0.5rem", fontFamily: "monospace" }}>{s.symbol}</td>

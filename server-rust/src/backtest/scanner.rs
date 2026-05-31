@@ -22,7 +22,17 @@ pub struct ScanResultItem {
     pub final_value: Decimal,
 }
 
+/// 扫描进度信息
+pub struct ScanProgressInfo {
+    pub progress: f64,
+    pub message: String,
+    pub elapsed_secs: Option<f64>,
+    pub eta_secs: Option<f64>,
+}
+
 /// 扫描全市场标的（通过 Python 沙箱批量执行用户策略）
+///
+/// `progress_tx` 用于实时推送扫描进度（含 ETA）给调用方。
 pub async fn scan_market(
     _db: &PgPool,
     ts_db: &PgPool,
@@ -34,6 +44,8 @@ pub async fn scan_market(
     start_date: &str,
     end_date: &str,
     initial_cash: f64,
+    progress_tx: Option<tokio::sync::mpsc::Sender<ScanProgressInfo>>,
+    exclude_st: bool,
 ) -> Result<(Vec<ScanResultItem>, usize), AppError> {
     info!("Starting market scan with user strategy, top_n={}", top_n);
 
@@ -51,9 +63,27 @@ pub async fn scan_market(
     } else {
         // 按市场过滤: cn=A股(6位数字), hk=港股(5位数字), us=美股(纯字母)
         let (sql, filter_desc) = match exchange {
-            "hk" => ("SELECT symbol, name FROM stock_basic WHERE is_active = TRUE AND symbol ~ '^[0-9]{5}$' ORDER BY symbol", "港股"),
-            "us" => ("SELECT symbol, name FROM stock_basic WHERE is_active = TRUE AND symbol ~ '^[A-Z]+$' ORDER BY symbol", "美股"),
-            _    => ("SELECT symbol, name FROM stock_basic WHERE is_active = TRUE AND symbol ~ '^[0-9]{6}$' ORDER BY symbol", "A股"),
+            "hk" => {
+                if exclude_st {
+                    ("SELECT symbol, name FROM stock_basic WHERE is_active = TRUE AND symbol ~ '^[0-9]{5}$' AND name NOT LIKE '%ST%' ORDER BY symbol", "港股(排除ST)")
+                } else {
+                    ("SELECT symbol, name FROM stock_basic WHERE is_active = TRUE AND symbol ~ '^[0-9]{5}$' ORDER BY symbol", "港股")
+                }
+            },
+            "us" => {
+                if exclude_st {
+                    ("SELECT symbol, name FROM stock_basic WHERE is_active = TRUE AND symbol ~ '^[A-Z]+$' AND name NOT LIKE '%ST%' ORDER BY symbol", "美股(排除ST)")
+                } else {
+                    ("SELECT symbol, name FROM stock_basic WHERE is_active = TRUE AND symbol ~ '^[A-Z]+$' ORDER BY symbol", "美股")
+                }
+            },
+            _    => {
+                if exclude_st {
+                    ("SELECT symbol, name FROM stock_basic WHERE is_active = TRUE AND symbol ~ '^[0-9]{6}$' AND name NOT LIKE '%ST%' ORDER BY symbol", "A股(排除ST)")
+                } else {
+                    ("SELECT symbol, name FROM stock_basic WHERE is_active = TRUE AND symbol ~ '^[0-9]{6}$' ORDER BY symbol", "A股")
+                }
+            },
         };
         let stocks: Vec<(String, String)> = sqlx::query_as(sql)
             .fetch_all(ts_db)
@@ -74,11 +104,14 @@ pub async fn scan_market(
         start_date,
         end_date,
         initial_cash,
+        progress_tx,
     ).await?;
 
     // 3. 解析结果
     let mut results: Vec<ScanResultItem> = Vec::new();
+    let mut total_from_python = 0usize;
     if let Some(items) = batch_result.get("results").and_then(|v| v.as_array()) {
+        total_from_python = items.len();
         for item in items {
             let symbol = item.get("symbol").and_then(|v| v.as_str()).unwrap_or("").to_string();
             let score = item.get("score").and_then(|v| v.as_f64()).unwrap_or(0.0);
@@ -106,11 +139,11 @@ pub async fn scan_market(
         }
     }
 
-    let total_scanned = results.len();
+    let total_scanned = total_from_python;
     results.sort_by(|a, b| b.score.cmp(&a.score));
     results.truncate(top_n);
 
-    info!("Scan complete: {} suitable stocks out of {} scanned", results.len(), total_scanned);
+    info!("Scan complete: {} suitable stocks out of {} scanned ({} passed threshold)", results.len(), total_scanned, total_scanned - (total_scanned - results.len()));
     Ok((results, total_scanned))
 }
 
@@ -121,8 +154,9 @@ async fn run_batch_scan_python(
     start_date: &str,
     end_date: &str,
     initial_cash: f64,
+    progress_tx: Option<tokio::sync::mpsc::Sender<ScanProgressInfo>>,
 ) -> Result<serde_json::Value, AppError> {
-    use tokio::io::AsyncWriteExt;
+    use tokio::io::{AsyncWriteExt, AsyncBufReadExt};
 
     let runner_path = std::env::current_exe()
         .ok()
@@ -156,12 +190,51 @@ async fn run_batch_scan_python(
     }
     drop(child.stdin.take());
 
+    // Read stderr in a separate task for progress reporting + ETA forwarding
+    let stderr = child.stderr.take().unwrap();
+    let progress_tx_clone = progress_tx;
+    let stderr_task = tokio::spawn(async move {
+        let mut reader = tokio::io::BufReader::new(stderr);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line).await {
+                Ok(0) => break,
+                Ok(_) => {
+                    let trimmed = line.trim();
+                    if !trimmed.is_empty() {
+                        if let Ok(progress) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                            if let Some(msg) = progress.get("msg").and_then(|v| v.as_str()) {
+                                let pct = progress.get("progress").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                                let elapsed = progress.get("elapsed").and_then(|v| v.as_f64());
+                                let eta = progress.get("eta_seconds").and_then(|v| v.as_f64());
+                                info!("Scan progress: {}% - {} (elapsed: {:?}s, ETA: {:?}s)", pct, msg, elapsed, eta);
+                                if let Some(ref tx) = progress_tx_clone {
+                                    let _ = tx.send(ScanProgressInfo {
+                                        progress: pct,
+                                        message: msg.to_string(),
+                                        elapsed_secs: elapsed,
+                                        eta_secs: eta,
+                                    }).await;
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
     let output = tokio::time::timeout(
-        std::time::Duration::from_secs(600),
+        std::time::Duration::from_secs(1800),
         child.wait_with_output(),
     ).await
-    .map_err(|_| AppError::BadRequest("Scan timeout (600s)".to_string()))?
+    .map_err(|_| AppError::BadRequest("Scan timeout (1800s)".to_string()))?
     .map_err(|e| AppError::BadRequest(format!("Python execution failed: {}", e)))?;
+
+    // Wait for stderr reader to finish
+    let _ = stderr_task.await;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let first_line = stdout.lines().next().unwrap_or("{}");

@@ -39,7 +39,7 @@ function App() {
         <Route path="strategies/:id" element={<StrategyEditorPage />} />
         <Route path="strategy-backtest" element={<StrategyBacktestPage />} />
         <Route path="backtests" element={<BacktestListPage />} />
-        <Route path="backtests/:id" element={<BacktestResultPage />} />
+        <Route path="backtests/:id" element={<BacktestResultPage key={window.location.pathname} />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="subscription" element={<SubscriptionPage />} />
       </Route>

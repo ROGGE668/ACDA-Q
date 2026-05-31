@@ -27,13 +27,13 @@ pub async fn create_strategy(
     Json(payload): Json<StrategyCreate>,
 ) -> Result<Json<Strategy>, AppError> {
     let strategy: Strategy = sqlx::query_as(
-        "INSERT INTO strategies (user_id, name, description, type, code, params) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *"
+        "INSERT INTO strategies (user_id, name, description, strategy_type, code, params) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *"
     )
     .bind(current_user.id)
     .bind(&payload.name)
     .bind(&payload.description)
     .bind(&payload.strategy_type)
-    .bind(payload.code.as_deref().unwrap_or(""))
+    .bind(payload.code.as_deref().map(|s| s.trim()).unwrap_or(""))
     .bind(payload.params.unwrap_or(serde_json::json!({})))
     .fetch_one(&state.db)
     .await?;
@@ -76,7 +76,7 @@ pub async fn update_strategy(
     .bind(id)
     .bind(&payload.name)
     .bind(&payload.description)
-    .bind(&payload.code)
+    .bind(payload.code.as_deref().map(|s| s.trim()))
     .bind(&payload.params)
     .bind(current_user.id)
     .fetch_one(&state.db)

@@ -65,7 +65,7 @@ export default function Layout() {
           <div style={{ color: "var(--muted)", fontSize: "0.75rem" }}>
             {user?.email}
           </div>
-          <button className="secondary" style={{ marginTop: "0.5rem", width: "100%" }} onClick={() => { logout(); navigate("/login"); }}>
+          <button className="secondary" style={{ marginTop: "0.5rem", width: "100%" }} onClick={() => { logout(); }}>
             退出登录
           </button>
         </div>

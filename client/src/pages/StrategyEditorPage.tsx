@@ -68,6 +68,7 @@ export default function StrategyEditorPage() {
   const [selectedStocks, setSelectedStocks] = useState<string[]>([]);
   const [fullMarketScan, setFullMarketScan] = useState(false);
   const [exchange, setExchange] = useState("cn");
+  const [excludeSt, setExcludeSt] = useState(false);
 
   useEffect(() => {
     if (id) {
@@ -257,6 +258,7 @@ useEffect(() => {
           top_n: 50,
           score_threshold: 0,
           exchange: exchange,
+          exclude_st: excludeSt,
           ...Object.fromEntries(params.map((p) => [p.name, p.default])),
         };
       } else {
@@ -393,6 +395,8 @@ useEffect(() => {
                 onFullMarketScanChange={setFullMarketScan}
                 exchange={exchange}
                 onExchangeChange={setExchange}
+                excludeSt={excludeSt}
+                onExcludeStChange={setExcludeSt}
               />
 
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "0.75rem" }}>

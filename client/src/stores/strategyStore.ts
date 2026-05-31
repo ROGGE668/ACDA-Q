@@ -1,50 +1,51 @@
 import { create } from "zustand";
-import { Store } from "@tauri-apps/plugin-store";
+import { strategyAPI } from "../services/api";
 
-interface Strategy {
+export interface Strategy {
   id: string;
   name: string;
   description?: string;
-  type?: string;
-  code?: string;
+  strategy_type?: string;
+  code: string;
   params?: Record<string, any>;
-  created_at: string;
-  updated_at: string;
+  version?: number;
+  user_id?: string;
+  created_at?: string;
+  updated_at?: string;
 }
 
 interface StrategyState {
   strategies: Strategy[];
   loading: boolean;
   loaded: boolean;
+  error: string | null;
   fetchStrategies: () => Promise<void>;
   getStrategy: (id: string) => Strategy | undefined;
-  saveStrategy: (strategy: Omit<Strategy, "id" | "created_at" | "updated_at"> & { id?: string }) => Promise<Strategy>;
+  saveStrategy: (data: {
+    id?: string;
+    name: string;
+    description?: string;
+    code: string;
+    type?: string;
+    params?: Record<string, any>;
+  }) => Promise<Strategy>;
   removeStrategy: (id: string) => Promise<void>;
-}
-
-let storeInstance: Store | null = null;
-
-async function getStore(): Promise<Store> {
-  if (!storeInstance) {
-    storeInstance = await Store.load("strategies.json");
-  }
-  return storeInstance;
 }
 
 export const useStrategyStore = create<StrategyState>((set, get) => ({
   strategies: [],
   loading: false,
   loaded: false,
+  error: null,
 
   fetchStrategies: async () => {
-    set({ loading: true });
+    set({ loading: true, error: null });
     try {
-      const store = await getStore();
-      const data = await store.get<Strategy[]>("strategies");
+      const { data } = await strategyAPI.list();
       set({ strategies: data || [], loading: false, loaded: true });
-    } catch (e) {
-      console.error("Failed to load strategies:", e);
-      set({ strategies: [], loading: false, loaded: true });
+    } catch (e: any) {
+      const msg = e.response?.data?.error || e.message || "加载策略失败";
+      set({ error: msg, loading: false, loaded: true });
     }
   },
 
@@ -53,35 +54,40 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
   },
 
   saveStrategy: async (strategy) => {
-    if (!strategy.id) {
-      throw new Error("Strategy ID is required for update");
+    if (strategy.id) {
+      const { data } = await strategyAPI.update(strategy.id, {
+        name: strategy.name,
+        description: strategy.description,
+        code: strategy.code,
+        params: strategy.params,
+      });
+      set((state) => ({
+        strategies: state.strategies.map((s) => (s.id === strategy.id ? data : s)),
+      }));
+      return data;
+    } else {
+      const { data } = await strategyAPI.create({
+        name: strategy.name,
+        description: strategy.description,
+        code: strategy.code,
+        strategy_type: strategy.type || "single_stock",
+        params: strategy.params || {},
+      });
+      set((state) => ({
+        strategies: [...state.strategies, data],
+      }));
+      return data;
     }
-    const store = await getStore();
-    const existing = get().strategies.find((s) => s.id === strategy.id);
-    if (!existing) {
-      throw new Error(`Strategy with id ${strategy.id} not found`);
-    }
-    const now = new Date().toISOString();
-
-    const saved: Strategy = {
-      ...existing,
-      ...strategy,
-      updated_at: now,
-    } as Strategy;
-
-    const updated = get().strategies.map((s) => (s.id === saved.id ? saved : s));
-
-    await store.set("strategies", updated);
-    await store.save();
-    set({ strategies: updated });
-    return saved;
   },
 
   removeStrategy: async (id: string) => {
-    const store = await getStore();
-    const updated = get().strategies.filter((s) => s.id !== id);
-    await store.set("strategies", updated);
-    await store.save();
-    set({ strategies: updated });
+    try {
+      await strategyAPI.delete(id);
+    } catch (e: any) {
+      if (e.response?.status !== 404) throw e;
+    }
+    set((state) => ({
+      strategies: state.strategies.filter((s) => s.id !== id),
+    }));
   },
 }));

@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { Store } from "@tauri-apps/plugin-store";
+import { isTauri, BrowserStore, IStore } from "./web-compat";
 
 interface AISettings {
   deepseekApiKey: string;
@@ -15,11 +15,16 @@ interface AISettingsState extends AISettings {
   loadSettings: () => Promise<void>;
 }
 
-let storeInstance: Store | null = null;
+let storeInstance: IStore | null = null;
 
-async function getStore(): Promise<Store> {
+async function getStore(): Promise<IStore> {
   if (!storeInstance) {
-    storeInstance = await Store.load("ai_settings.json");
+    if (isTauri()) {
+      const { Store } = await import("@tauri-apps/plugin-store");
+      storeInstance = await Store.load("ai_settings.json") as unknown as IStore;
+    } else {
+      storeInstance = new BrowserStore("ai_settings");
+    }
   }
   return storeInstance;
 }
@@ -33,9 +38,9 @@ export const useAISettingsStore = create<AISettingsState>((set, get) => ({
   loadSettings: async () => {
     try {
       const store = await getStore();
-      const apiKey = await store.get<string>("deepseek_api_key");
-      const baseUrl = await store.get<string>("deepseek_base_url");
-      const model = await store.get<string>("deepseek_model");
+      const apiKey = await store.get("deepseek_api_key");
+      const baseUrl = await store.get("deepseek_base_url");
+      const model = await store.get("deepseek_model");
       set({
         deepseekApiKey: apiKey ?? get().deepseekApiKey,
         deepseekBaseUrl: baseUrl ?? get().deepseekBaseUrl,

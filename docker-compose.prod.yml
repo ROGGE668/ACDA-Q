@@ -65,7 +65,7 @@ services:
 
   api:
     build:
-      context: ./server
+      context: ./server-rust
       dockerfile: Dockerfile
     container_name: quant_api
     environment:
@@ -103,7 +103,7 @@ services:
 
   worker:
     build:
-      context: ./server
+      context: ./server-rust
       dockerfile: Dockerfile
     container_name: quant_worker
     environment:

@@ -34,12 +34,33 @@ pub struct AuthState {
     pub settings: Arc<Settings>,
 }
 
-/// 从请求头中提取 Bearer Token
-fn extract_bearer_token(headers: &header::HeaderMap) -> Option<&str> {
+/// 从 Cookie 中提取指定名称的值
+fn extract_cookie(headers: &header::HeaderMap, name: &str) -> Option<String> {
+    let cookie_header = headers.get(header::COOKIE)?.to_str().ok()?;
+    for part in cookie_header.split(';') {
+        let kv = part.trim();
+        if let Some(val) = kv.strip_prefix(name) {
+            let val = val.strip_prefix('=').unwrap_or("").trim();
+            if !val.is_empty() {
+                return Some(val.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// 提取认证 token：优先 httpOnly cookie，其次 Authorization header
+fn extract_token(headers: &header::HeaderMap) -> Option<String> {
+    // 1. 优先从 httpOnly cookie 读取
+    if let Some(token) = extract_cookie(headers, "acda_access") {
+        return Some(token);
+    }
+    // 2. 降级到 Authorization header（Tauri 客户端使用）
     headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer "))
+        .map(|s| s.to_string())
 }
 
 /// 认证中间件：校验 JWT 并将 CurrentUser 注入请求扩展
@@ -54,9 +75,9 @@ pub async fn require_auth(
     mut request: Request,
     next: Next,
 ) -> Result<Response, AuthError> {
-    let token = extract_bearer_token(request.headers()).ok_or(AuthError::MissingToken)?;
+    let token = extract_token(request.headers()).ok_or(AuthError::MissingToken)?;
 
-    let claims = decode_token(token, &auth_state.settings).map_err(|_| AuthError::InvalidToken)?;
+    let claims = decode_token(&token, &auth_state.settings).map_err(|_| AuthError::InvalidToken)?;
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AuthError::InvalidToken)?;
 
     // 查询数据库获取完整用户信息（后续可缓存到 Redis）

@@ -19,7 +19,7 @@ services:
     container_name: acdaq_postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-quant}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-quant123}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dev_only_not_for_prod}
       POSTGRES_DB: ${POSTGRES_DB:-quant_db}
     ports:
       - "5432:5432"
@@ -37,7 +37,7 @@ services:
     container_name: acdaq_timescaledb
     environment:
       POSTGRES_USER: ${TIMESCALE_USER:-quant}
-      POSTGRES_PASSWORD: ${TIMESCALE_PASSWORD:-quant123}
+      POSTGRES_PASSWORD: ${TIMESCALE_PASSWORD:-dev_only_not_for_prod}
       POSTGRES_DB: ${TIMESCALE_DB:-quant_market}
     ports:
       - "5433:5432"
@@ -71,11 +71,14 @@ services:
     container_name: acdaq_api
     ports:
       - "8000:8000"
+    networks:
+      - frontend
+      - backend
     environment:
       # Database
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-quant}:${POSTGRES_PASSWORD:-quant123}@postgres:5432/${POSTGRES_DB:-quant_db}
-      SYNC_DATABASE_URL: postgresql://${POSTGRES_USER:-quant}:${POSTGRES_PASSWORD:-quant123}@postgres:5432/${POSTGRES_DB:-quant_db}
-      TIMESCALE_DATABASE_URL: postgresql://${TIMESCALE_USER:-quant}:${TIMESCALE_PASSWORD:-quant123}@timescaledb:5432/${TIMESCALE_DB:-quant_market}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-quant}:${POSTGRES_PASSWORD:-dev_only_not_for_prod}@postgres:5432/${POSTGRES_DB:-quant_db}
+      SYNC_DATABASE_URL: postgresql://${POSTGRES_USER:-quant}:${POSTGRES_PASSWORD:-dev_only_not_for_prod}@postgres:5432/${POSTGRES_DB:-quant_db}
+      TIMESCALE_DATABASE_URL: postgresql://${TIMESCALE_USER:-quant}:${TIMESCALE_PASSWORD:-dev_only_not_for_prod}@timescaledb:5432/${TIMESCALE_DB:-quant_market}
       # Redis
       REDIS_URL: redis://redis:6379/0
       # Security
@@ -109,6 +112,7 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+    restart: unless-stopped
 
   # ── Rust Worker（处理回测任务）──────────────────────────────────────────────
   # 注意：同时只运行一个 worker 实例；Redis Streams 自动负载均衡多消费者
@@ -117,10 +121,12 @@ services:
       context: ./server-rust
       dockerfile: Dockerfile
     container_name: acdaq_worker
+    networks:
+      - backend
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-quant}:${POSTGRES_PASSWORD:-quant123}@postgres:5432/${POSTGRES_DB:-quant_db}
-      SYNC_DATABASE_URL: postgresql://${POSTGRES_USER:-quant}:${POSTGRES_PASSWORD:-quant123}@postgres:5432/${POSTGRES_DB:-quant_db}
-      TIMESCALE_DATABASE_URL: postgresql://${TIMESCALE_USER:-quant}:${TIMESCALE_PASSWORD:-quant123}@timescaledb:5432/${TIMESCALE_DB:-quant_market}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-quant}:${POSTGRES_PASSWORD:-dev_only_not_for_prod}@postgres:5432/${POSTGRES_DB:-quant_db}
+      SYNC_DATABASE_URL: postgresql://${POSTGRES_USER:-quant}:${POSTGRES_PASSWORD:-dev_only_not_for_prod}@postgres:5432/${POSTGRES_DB:-quant_db}
+      TIMESCALE_DATABASE_URL: postgresql://${TIMESCALE_USER:-quant}:${TIMESCALE_PASSWORD:-dev_only_not_for_prod}@timescaledb:5432/${TIMESCALE_DB:-quant_market}
       REDIS_URL: redis://redis:6379/0
       SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set in production}
       BACKTEST_COMMISSION: ${BACKTEST_COMMISSION:-0.0003}
@@ -152,6 +158,8 @@ services:
       - "443:443"
     volumes:
       - ./nginx/nginx.rust-only.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - frontend
     depends_on:
       api:
         condition: service_healthy
@@ -160,6 +168,10 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+
+networks:
+  frontend:
+  backend:
 
 volumes:
   postgres_data:

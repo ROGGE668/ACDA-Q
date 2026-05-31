@@ -57,6 +57,7 @@ pub struct BacktestPayload {
     pub initial_cash: String, // rust_decimal::Decimal serialized as string
     pub params: serde_json::Value,
     pub scope: String,
+    pub period: String,
 }
 
 /// 队列客户端
@@ -99,7 +100,7 @@ impl Queue {
             .arg("CREATE")
             .arg(&self.stream_key)
             .arg(&self.consumer_group)
-            .arg("$")
+            .arg("0")
             .arg("MKSTREAM")
             .query_async(&mut conn)
             .await;
@@ -135,6 +136,12 @@ impl Queue {
             redis::RedisError::from((redis::ErrorKind::IoError, "Task serialization failed", e.to_string()))
         })?;
 
+        const MAX_PAYLOAD_BYTES: usize = 1024 * 1024; // 1MB
+        if task_json.len() > MAX_PAYLOAD_BYTES {
+            error!("Task payload too large: {} bytes (max {})", task_json.len(), MAX_PAYLOAD_BYTES);
+            return Err(redis::RedisError::from((redis::ErrorKind::TypeError, "Task payload exceeds 1MB limit")));
+        }
+
         let id: String = conn
             .xadd(&self.stream_key, "*", &[("task", task_json)])
             .await?;
@@ -146,20 +153,21 @@ impl Queue {
     /// 消费任务（阻塞读取）
     pub async fn consume_task<T: DeserializeOwned>(
         &self,
-        _block_ms: usize,
+        block_ms: usize,
     ) -> Result<Option<(String, Task<T>)>, QueueError> {
         let mut conn = self.client.get_multiplexed_async_connection().await?;
 
-        // 使用 redis::cmd 手动构建 XREADGROUP 命令
-        let result: redis::Value = redis::cmd("XREADGROUP")
-            .arg("GROUP")
+        // 使用 redis::cmd 手动构建 XREADGROUP 命令，带 BLOCK 参数防止空转
+        let mut cmd = redis::cmd("XREADGROUP");
+        cmd.arg("GROUP")
             .arg(&self.consumer_group)
             .arg(&self.consumer_name)
+            .arg("BLOCK")
+            .arg(block_ms as i64)
             .arg("STREAMS")
             .arg(&self.stream_key)
-            .arg(">")
-            .query_async(&mut conn)
-            .await?;
+            .arg(">");
+        let result: redis::Value = cmd.query_async(&mut conn).await?;
 
         // 解析 Redis 返回的 Value
         if let redis::Value::Bulk(streams) = result {
@@ -167,28 +175,48 @@ impl Queue {
                 if let redis::Value::Bulk(entries) = stream {
                     for entry in entries {
                         if let redis::Value::Bulk(items) = entry {
-                            if items.len() >= 2 {
-                                let entry_id = match &items[0] {
+                            // XREADGROUP 返回: Bulk([entry_id, Bulk([field1, val1, ...])])
+                            // 但外层也可能套 Bulk([Bulk([id, fields])])，使 items.len()==1
+                            let (entry_id, fields_bulk) = if items.len() >= 2 {
+                                let id = match &items[0] {
                                     redis::Value::Data(v) => String::from_utf8_lossy(v).to_string(),
                                     _ => continue,
                                 };
-                                if let redis::Value::Bulk(fields) = &items[1] {
-                                    for i in (0..fields.len()).step_by(2) {
-                                        if i + 1 < fields.len() {
-                                            let key = match &fields[i] {
-                                                redis::Value::Data(v) => String::from_utf8_lossy(v),
-                                                _ => continue,
-                                            };
-                                            if key == "task" {
-                                                let val = match &fields[i + 1] {
-                                                    redis::Value::Data(v) => String::from_utf8_lossy(v).to_string(),
-                                                    _ => continue,
-                                                };
-                                                let task: Task<T> = serde_json::from_str(&val)
-                                                    .map_err(|e| QueueError::TaskDeserialization(e.to_string()))?;
-                                                return Ok(Some((entry_id, task)));
-                                            }
+                                match &items[1] {
+                                    redis::Value::Bulk(f) => (id, f),
+                                    _ => continue,
+                                }
+                            } else if items.len() == 1 {
+                                match &items[0] {
+                                    redis::Value::Bulk(inner) if inner.len() >= 2 => {
+                                        let id = match &inner[0] {
+                                            redis::Value::Data(v) => String::from_utf8_lossy(v).to_string(),
+                                            _ => continue,
+                                        };
+                                        match &inner[1] {
+                                            redis::Value::Bulk(f) => (id, f),
+                                            _ => continue,
                                         }
+                                    }
+                                    _ => continue,
+                                }
+                            } else {
+                                continue;
+                            };
+                            for i in (0..fields_bulk.len()).step_by(2) {
+                                if i + 1 < fields_bulk.len() {
+                                    let key = match &fields_bulk[i] {
+                                        redis::Value::Data(v) => String::from_utf8_lossy(v),
+                                        _ => continue,
+                                    };
+                                    if key == "task" {
+                                        let val = match &fields_bulk[i + 1] {
+                                            redis::Value::Data(v) => String::from_utf8_lossy(v).to_string(),
+                                            _ => continue,
+                                        };
+                                        let task: Task<T> = serde_json::from_str(&val)
+                                            .map_err(|e| QueueError::TaskDeserialization(e.to_string()))?;
+                                        return Ok(Some((entry_id, task)));
                                     }
                                 }
                             }
@@ -206,6 +234,65 @@ impl Queue {
         let mut conn = self.client.get_multiplexed_async_connection().await?;
         let _: () = conn.xack(&self.stream_key, &self.consumer_group, &[entry_id]).await?;
         Ok(())
+    }
+
+    /// 消费已分配给本消费者的 pending 消息（非阻塞）
+    /// 当消费者组用 ID 0 创建时，所有已有消息会被立即分配。
+    /// consume_task 的 > 参数只读新消息，pending 的需要此方法处理。
+    pub async fn consume_pending<T: DeserializeOwned>(
+        &self,
+        count: usize,
+    ) -> Result<Vec<(String, Task<T>)>, QueueError> {
+        let mut conn = self.client.get_multiplexed_async_connection().await?;
+        let mut cmd = redis::cmd("XREADGROUP");
+        cmd.arg("GROUP")
+            .arg(&self.consumer_group)
+            .arg(&self.consumer_name)
+            .arg("COUNT")
+            .arg(count)
+            .arg("STREAMS")
+            .arg(&self.stream_key)
+            .arg("0");  // 0 = 读取已分配的 pending 消息
+        let result: redis::Value = cmd.query_async(&mut conn).await?;
+        let mut tasks = Vec::new();
+        if let redis::Value::Bulk(streams) = result {
+            for stream in streams {
+                if let redis::Value::Bulk(entries) = stream {
+                    for entry in entries {
+                        if let redis::Value::Bulk(items) = entry {
+                            let (entry_id, fields_bulk) = if items.len() >= 2 {
+                                let id = match &items[0] {
+                                    redis::Value::Data(v) => String::from_utf8_lossy(v).to_string(),
+                                    _ => continue,
+                                };
+                                match &items[1] {
+                                    redis::Value::Bulk(f) => (id, f),
+                                    _ => continue,
+                                }
+                            } else { continue };
+                            for i in (0..fields_bulk.len()).step_by(2) {
+                                if i + 1 < fields_bulk.len() {
+                                    let key = match &fields_bulk[i] {
+                                        redis::Value::Data(v) => String::from_utf8_lossy(v),
+                                        _ => continue,
+                                    };
+                                    if key == "task" {
+                                        let val = match &fields_bulk[i + 1] {
+                                            redis::Value::Data(v) => String::from_utf8_lossy(v).to_string(),
+                                            _ => continue,
+                                        };
+                                        if let Ok(task) = serde_json::from_str::<Task<T>>(&val) {
+                                            tasks.push((entry_id.clone(), task));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(tasks)
     }
 
     /// 更新任务状态（存入 Redis Hash）
@@ -268,12 +355,41 @@ impl Queue {
         Ok(())
     }
 
+    /// 发布带 ETA 的进度到 `backtest:progress:{job_id}` 频道
+    pub async fn publish_progress_detail(
+        &self,
+        job_id: &str,
+        progress: f64,
+        message: &str,
+        status: &str,
+        elapsed_secs: Option<f64>,
+        eta_secs: Option<f64>,
+    ) -> RedisResult<()> {
+        let mut conn = self.client.get_multiplexed_async_connection().await?;
+        let channel = format!("backtest:progress:{}", job_id);
+        let mut payload = serde_json::json!({
+            "job_id": job_id,
+            "status": status,
+            "progress": (progress * 100.0).round() / 100.0,
+            "message": message,
+            "timestamp": chrono::Utc::now().to_rfc3339(),
+        });
+        if let Some(elapsed) = elapsed_secs {
+            payload["elapsed_secs"] = serde_json::json!(elapsed);
+        }
+        if let Some(eta) = eta_secs {
+            payload["eta_secs"] = serde_json::json!(eta);
+        }
+        let _: () = conn.publish(&channel, payload.to_string()).await?;
+        Ok(())
+    }
+
     /// 清理挂起的旧任务（死信处理）
     pub async fn reclaim_pending(&self, min_idle_ms: usize) -> RedisResult<Vec<(String, String)>> {
         let mut conn = self.client.get_multiplexed_async_connection().await?;
 
         // XPENDING 返回四元组数组: (id, consumer, idle_ms, deliveries)
-        let result: Vec<(String, String, usize, usize)> = redis::cmd("XPENDING")
+        let raw: redis::Value = redis::cmd("XPENDING")
             .arg(&self.stream_key)
             .arg(&self.consumer_group)
             .arg("-")
@@ -283,7 +399,26 @@ impl Queue {
             .await?;
 
         let mut reclaimed = Vec::new();
-        for (entry_id, _consumer, _idle, _deliveries) in result {
+        let entries = match raw {
+            redis::Value::Bulk(items) => items,
+            _ => return Ok(Vec::new()),
+        };
+        for entry in entries {
+            let (entry_id, idle_ms) = match entry {
+                redis::Value::Bulk(fields) if fields.len() >= 3 => {
+                    let id = match &fields[0] {
+                        redis::Value::Data(v) => String::from_utf8_lossy(v).trim_matches('"').to_string(),
+                        _ => continue,
+                    };
+                    let idle = match &fields[2] {
+                        redis::Value::Int(n) => *n as usize,
+                        _ => 0,
+                    };
+                    (id, idle)
+                }
+                _ => continue,
+            };
+            if idle_ms < min_idle_ms { continue; }
             let claimed: redis::Value = redis::cmd("XCLAIM")
                 .arg(&self.stream_key)
                 .arg(&self.consumer_group)
@@ -337,8 +472,64 @@ pub async fn start_worker<T, W>(
 {
     queue.init_consumer_group().await.ok();
 
+    // 启动时先消费 pending 消息（消费者组用 0 创建时，所有已有消息会被立即分配）
+    {
+        let pending = queue.consume_pending::<T>(100).await.unwrap_or_default();
+        if !pending.is_empty() {
+            info!("Draining {} pending messages on startup", pending.len());
+            for (entry_id, task) in pending {
+                info!("Processing pending task: {}", task.id);
+                queue.update_task_status(&task.id, TaskStatus::Running, None).await.ok();
+                match worker.process(&task).await {
+                    Ok(()) => {
+                        queue.ack_task(&entry_id).await.ok();
+                        queue.update_task_status(&task.id, TaskStatus::Success, None).await.ok();
+                        info!("Pending task completed: {}", task.id);
+                    }
+                    Err(err) => {
+                        error!("Pending task failed: {} - {}", task.id, err);
+                        queue.update_task_status(&task.id, TaskStatus::Failed, Some(err)).await.ok();
+                    }
+                }
+            }
+        }
+    }
+
+    // 启动时立即回收死消费者的 pending 消息（idle=0，不等待）
+    {
+        info!("Startup: attempting to reclaim pending messages...");
+            match queue.reclaim_pending(0).await {
+            Ok(reclaimed) if !reclaimed.is_empty() => {
+                info!("Startup reclaim: {} tasks from dead consumers", reclaimed.len());
+                for (entry_id, task_json) in &reclaimed {
+                    if let Ok(task) = serde_json::from_str::<Task<T>>(task_json) {
+                        info!("Processing reclaimed task: {}", task.id);
+                        queue.update_task_status(&task.id, TaskStatus::Running, None).await.ok();
+                        match worker.process(&task).await {
+                            Ok(()) => {
+                                queue.ack_task(&entry_id).await.ok();
+                                queue.update_task_status(&task.id, TaskStatus::Success, None).await.ok();
+                                info!("Reclaimed task completed: {}", task.id);
+                            }
+                            Err(err) => {
+                                error!("Reclaimed task failed: {} - {}", task.id, err);
+                                queue.update_task_status(&task.id, TaskStatus::Failed, Some(err)).await.ok();
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(_) => {
+                info!("Startup reclaim: no pending messages to reclaim");
+            }
+            Err(e) => {
+                error!("Startup reclaim error: {}", e);
+            }
+        }
+    }
+
     let mut shutdown_rx = shutdown;
-    let mut reclaim_interval = interval(Duration::from_secs(60));
+    let mut reclaim_interval = interval(Duration::from_secs(5));
 
     loop {
         tokio::select! {
@@ -349,14 +540,66 @@ pub async fn start_worker<T, W>(
                 }
             }
             _ = reclaim_interval.tick() => {
-                match queue.reclaim_pending(300_000).await {
-                    Ok(tasks) if !tasks.is_empty() => {
-                        info!("Reclaimed {} pending tasks", tasks.len());
+                // 每 5 秒先尝试处理本消费者的 pending 消息
+                match queue.consume_pending::<T>(10).await {
+                    Ok(pending) if !pending.is_empty() => {
+                        info!("Draining {} pending messages", pending.len());
+                        for (entry_id, task) in pending {
+                            info!("Processing pending task: {}", task.id);
+                            queue.update_task_status(&task.id, TaskStatus::Running, None).await.ok();
+                            match worker.process(&task).await {
+                                Ok(()) => {
+                                    queue.ack_task(&entry_id).await.ok();
+                                    queue.update_task_status(&task.id, TaskStatus::Success, None).await.ok();
+                                    info!("Pending task completed: {}", task.id);
+                                }
+                                Err(err) => {
+                                    error!("Pending task failed: {} - {}", task.id, err);
+                                    queue.update_task_status(&task.id, TaskStatus::Failed, Some(err)).await.ok();
+                                    queue.ack_task(&entry_id).await.ok();
+                                }
+                            }
+                        }
                     }
-                    _ => {}
+                    Ok(pending) => {
+                        if pending.is_empty() {
+                            tracing::debug!("consume_pending: no pending messages for this consumer");
+                        }
+                    }
+                    Err(e) => {
+                        error!("consume_pending error: {}", e);
+                    }
+                }
+                // 再尝试回收死消费者的 pending 消息
+                match queue.reclaim_pending(5_000).await {
+                    Ok(reclaimed) if !reclaimed.is_empty() => {
+                        info!("Reclaimed {} tasks from dead consumers", reclaimed.len());
+                        for (entry_id, task_json) in &reclaimed {
+                            if let Ok(task) = serde_json::from_str::<Task<T>>(task_json) {
+                                info!("Processing reclaimed task: {}", task.id);
+                                queue.update_task_status(&task.id, TaskStatus::Running, None).await.ok();
+                                match worker.process(&task).await {
+                                    Ok(()) => {
+                                        queue.ack_task(&entry_id).await.ok();
+                                        queue.update_task_status(&task.id, TaskStatus::Success, None).await.ok();
+                                        info!("Reclaimed task completed: {}", task.id);
+                                    }
+                                    Err(err) => {
+                                        error!("Reclaimed task failed: {} - {}", task.id, err);
+                                        queue.update_task_status(&task.id, TaskStatus::Failed, Some(err)).await.ok();
+                                        queue.ack_task(&entry_id).await.ok();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        error!("Reclaim error: {}", e);
+                    }
                 }
             }
-            result = queue.consume_task::<T>(5000) => {
+            result = queue.consume_task::<T>(500) => {
                 match result {
                     Ok(Some((entry_id, task))) => {
                         info!("Processing task: {}", task.id);
@@ -372,12 +615,14 @@ pub async fn start_worker<T, W>(
                             Err(err) => {
                                 error!("Task failed: {} - {}", task.id, err);
                                 queue.update_task_status(&task.id, TaskStatus::Failed, Some(err)).await.ok();
-                                // 不重试：让死信队列处理
+                                // ACK 失败任务防止无限重试
+                                queue.ack_task(&entry_id).await.ok();
                             }
                         }
                     }
                     Ok(None) => {
-                        // 无任务，继续循环
+                        // 无任务，select! 的 consume_task 分支已在 BLOCK 500ms 中等待
+                        tracing::debug!("No new tasks, waiting...");
                     }
                     Err(e) => {
                         error!("Queue consumption error: {}", e);

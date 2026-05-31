@@ -44,15 +44,17 @@ pub fn calculate_performance(
     };
 
     // 最大回撤
-    let mut running_max = dec!(0);
+    let mut running_max = curve.first().map(|s| s.total_value).unwrap_or(dec!(0));
     let mut max_dd = dec!(0);
     for snap in curve.iter() {
         if snap.total_value > running_max {
             running_max = snap.total_value;
         }
-        let dd = (snap.total_value - running_max) / running_max;
-        if dd < max_dd {
-            max_dd = dd;
+        if running_max > dec!(0) {
+            let dd = (snap.total_value - running_max) / running_max;
+            if dd < max_dd {
+                max_dd = dd;
+            }
         }
     }
 

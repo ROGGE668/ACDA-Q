@@ -2,27 +2,33 @@
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager, Wry, State};
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, Modifiers, Shortcut, Code};
+use tauri::{AppHandle, Manager, Wry};
 use tauri_plugin_store::StoreExt;
 use sha2::{Sha256, Digest};
 use sysinfo::{System, RefreshKind, CpuRefreshKind};
 
 const STORE_PATH: &str = "settings.json";
 const DEVICE_STORE_PATH: &str = "device.json";
-const DEFAULT_API_BASE: &str = "http://124.220.70.210:8000/api/v1";
+const DEFAULT_API_BASE: &str = "http://100.68.25.78:8000/api/v1";
+const OLD_API_BASES: &[&str] = &[
+    "http://124.220.70.210:8000/api/v1",
+];
 
 // 设置默认配置
 fn init_default_settings(app: &AppHandle) {
     if let Ok(store) = app.store(STORE_PATH) {
-        if store.get("api_base").is_none() {
+        // 检查存储的 api_base 是否为旧 IP，自动迁移
+        let stored_api_base = store.get("api_base");
+        let needs_migration = stored_api_base.as_ref().and_then(|v| v.as_str()).is_some_and(|v| {
+            OLD_API_BASES.iter().any(|old| v == *old || v.starts_with(old))
+        });
+        if needs_migration {
+            let _ = store.set("api_base", DEFAULT_API_BASE);
+        } else if store.get("api_base").is_none() {
             let _ = store.set("api_base", DEFAULT_API_BASE);
         }
         if store.get("theme").is_none() {
             let _ = store.set("theme", "dark");
-        }
-        if store.get("global_shortcut_enabled").is_none() {
-            let _ = store.set("global_shortcut_enabled", true);
         }
         let _ = store.save();
     }
@@ -146,19 +152,6 @@ fn create_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     )
 }
 
-// 注册全局快捷键
-fn register_shortcuts(app: &AppHandle) {
-    let app_clone = app.clone();
-    if let Err(e) = app.global_shortcut().on_shortcut(
-        Shortcut::new(Some(Modifiers::SHIFT | Modifiers::SUPER), Code::KeyS),
-        move |_app, _shortcut, _event| {
-            toggle_window(&app_clone);
-        },
-    ) {
-        eprintln!("Failed to register global shortcut: {}", e);
-    }
-}
-
 // 显示/隐藏窗口
 fn toggle_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
@@ -229,7 +222,6 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_store::Builder::new().build())
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![get_device_fingerprint])
         .setup(|app| {
@@ -262,7 +254,6 @@ fn main() {
             });
 
             create_tray(app.handle())?;
-            register_shortcuts(app.handle());
 
             // macOS: 关闭窗口时不退出，只隐藏
             #[cfg(target_os = "macos")]

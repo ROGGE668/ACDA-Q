@@ -18,6 +18,7 @@ pub enum AppError {
     NotFound(String),
     BadRequest(String),
     RateLimited,
+    ServiceUnavailable(String),
     Internal(String),
 }
 
@@ -30,7 +31,24 @@ impl fmt::Display for AppError {
             AppError::NotFound(e) => write!(f, "Not found: {}", e),
             AppError::BadRequest(e) => write!(f, "Bad request: {}", e),
             AppError::RateLimited => write!(f, "Rate limit exceeded"),
+            AppError::ServiceUnavailable(e) => write!(f, "Service unavailable: {}", e),
             AppError::Internal(e) => write!(f, "Internal error: {}", e),
+        }
+    }
+}
+
+impl PartialEq for AppError {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (AppError::Database(a), AppError::Database(b)) => a.to_string() == b.to_string(),
+            (AppError::Validation(a), AppError::Validation(b)) => a == b,
+            (AppError::Auth(a), AppError::Auth(b)) => a == b,
+            (AppError::NotFound(a), AppError::NotFound(b)) => a == b,
+            (AppError::BadRequest(a), AppError::BadRequest(b)) => a == b,
+            (AppError::RateLimited, AppError::RateLimited) => true,
+            (AppError::ServiceUnavailable(a), AppError::ServiceUnavailable(b)) => a == b,
+            (AppError::Internal(a), AppError::Internal(b)) => a == b,
+            _ => false,
         }
     }
 }
@@ -55,6 +73,10 @@ impl IntoResponse for AppError {
                 StatusCode::TOO_MANY_REQUESTS,
                 "Rate limit exceeded".to_string(),
             ),
+            AppError::ServiceUnavailable(msg) => {
+                tracing::warn!("Service unavailable: {}", msg);
+                (StatusCode::SERVICE_UNAVAILABLE, "Service temporarily unavailable".to_string())
+            }
             AppError::Internal(msg) => {
                 tracing::error!("Internal error: {}", msg);
                 if HIDE_INTERNAL_DETAILS {
@@ -78,6 +100,8 @@ impl From<sqlx::Error> for AppError {
     fn from(err: sqlx::Error) -> Self {
         match err {
             sqlx::Error::RowNotFound => AppError::NotFound("Resource not found".to_string()),
+            sqlx::Error::PoolClosed => AppError::ServiceUnavailable("Database pool closed".to_string()),
+            sqlx::Error::PoolTimedOut => AppError::ServiceUnavailable("Database pool timed out".to_string()),
             _ => AppError::Database(err),
         }
     }

@@ -128,6 +128,19 @@ const FORBIDDEN_KEYWORDS: &[&str] = &[
     "ctypes.",
     "threading.",
     "multiprocessing.",
+    "__builtins__",
+    "importlib",
+    "builtins",
+    "__subclasses__",
+    "__globals__",
+    "__code__",
+    "__class__",
+    "__bases__",
+    "__mro__",
+    "__loader__",
+    "__spec__",
+    "__file__",
+    "__name__",
 ];
 
 /// 验证自定义策略代码安全性

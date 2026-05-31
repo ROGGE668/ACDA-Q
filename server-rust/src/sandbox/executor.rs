@@ -54,13 +54,18 @@ impl Default for SandboxConfig {
         Self {
             timeout_secs: 300,
             memory_limit_bytes: 512 * 1024 * 1024,
-            cpu_limit_secs: 60,
+            cpu_limit_secs: 120,
         }
     }
 }
 
 /// 进程池大小
-const POOL_SIZE: usize = 3;
+fn pool_size() -> usize {
+    std::env::var("ACDA_Q__SANDBOX_pool_size()")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(3)
+}
 
 /// 子进程包装
 struct PooledProcess {
@@ -141,8 +146,8 @@ struct ProcessPool {
 
 impl ProcessPool {
     fn new(runner_path: String) -> Self {
-        let mut processes = Vec::with_capacity(POOL_SIZE);
-        for _ in 0..POOL_SIZE {
+        let mut processes = Vec::with_capacity(pool_size());
+        for _ in 0..pool_size() {
             match PooledProcess::new(&runner_path) {
                 Ok(p) => processes.push(p),
                 Err(e) => warn!("Failed to create pooled process: {}", e),

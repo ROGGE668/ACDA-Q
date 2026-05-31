@@ -23,7 +23,12 @@ export const useBacktestStore = create<BacktestState>((set) => ({
   loading: false,
   fetchJobs: async () => {
     set({ loading: true });
-    const { data } = await backtestAPI.list();
-    set({ jobs: data, loading: false });
+    try {
+      const { data } = await backtestAPI.list();
+      set({ jobs: data, loading: false });
+    } catch (e) {
+      console.error("[backtestStore] fetchJobs failed:", e);
+      set({ loading: false });
+    }
   },
 }));

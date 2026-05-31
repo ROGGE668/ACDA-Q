@@ -76,14 +76,47 @@ fn get_cgroup_self() -> Option<std::path::PathBuf> {
 }
 
 /// 构建带有资源限制的 spawn 命令
-#[allow(dead_code)]
+///
+/// 在 Linux 上使用 `pre_exec` 设置 RLIMIT_AS（虚拟内存）和 RLIMIT_CPU（CPU 时间），
+/// 防止沙箱子进程消耗过多资源。
 pub fn build_constrained_command(
     mut cmd: Command,
     memory_limit_mb: u64,
     cpu_limit_secs: u64,
 ) -> Command {
     cmd.env("RUST_MIN_STACK", "8388608");
-    let _ = memory_limit_mb;
-    let _ = cpu_limit_secs;
+
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::process::CommandExt;
+        let mem_bytes = memory_limit_mb * 1024 * 1024;
+        let cpu_secs = cpu_limit_secs;
+        // Safety: pre_exec runs in the child process before exec, after fork.
+        // Only POSIX-safe calls are made (setrlimit).
+        unsafe {
+            cmd.pre_exec(move || {
+                use libc::{setrlimit, RLIMIT_AS, RLIMIT_CPU, rlimit};
+                let mem_limit = rlimit {
+                    rlim_cur: mem_bytes as _,
+                    rlim_max: mem_bytes as _,
+                };
+                setrlimit(RLIMIT_AS, &mem_limit);
+                let cpu_limit = rlimit {
+                    rlim_cur: cpu_secs as _,
+                    rlim_max: (cpu_secs + 10) as _,
+                };
+                setrlimit(RLIMIT_CPU, &cpu_limit);
+                Ok(())
+            });
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        // macOS: RLIMIT_AS is not supported; rely on Docker cgroup limits in production
+        let _ = memory_limit_mb;
+        let _ = cpu_limit_secs;
+    }
+
     cmd
 }

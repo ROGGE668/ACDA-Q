@@ -1,6 +1,6 @@
 [package]
 name = "quant-client"
-version = "0.2.4"
+version = "0.2.7"
 description = "A股量化投资平台客户端"
 authors = ["Quant Team"]
 edition = "2021"

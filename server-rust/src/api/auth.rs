@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use axum::extract::{Json, State};
+use axum::response::{IntoResponse, Response};
 use uuid::Uuid;
 
 use crate::api::AppState;
@@ -9,11 +10,28 @@ use crate::middleware::auth::CurrentUser;
 use crate::models::{UserLogin, UserOut, UserRegister};
 use crate::models::User;
 
+/// 创建带 httpOnly cookie 的 JSON 响应
+fn token_response(access: &str, refresh: &str) -> Response {
+    let body = serde_json::json!({
+        "status": "ok",
+        "access_token": access,
+        "refresh_token": refresh,
+    });
+    let mut response = Json(body).into_response();
+    // access_token cookie: 15 分钟
+    let secure = if std::env::var("RUST_ENV").unwrap_or_default() == "production" { "; Secure" } else { "" };
+    let h1 = format!("acda_access={}; Path=/; HttpOnly; SameSite=Lax; Max-Age=900{}", access, secure);
+    // refresh_token cookie: 7 天
+    let h2 = format!("acda_refresh={}; Path=/api/v1/auth; HttpOnly; SameSite=Lax; Max-Age=604800{}", refresh, secure);
+    response.headers_mut().append("set-cookie", h1.parse().unwrap());
+    response.headers_mut().append("set-cookie", h2.parse().unwrap());
+    response
+}
+
 pub async fn register(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<UserRegister>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    // 密码强度校验
+) -> Result<Response, AppError> {
     if payload.password.len() < 8
         || !payload.password.chars().any(|c| c.is_uppercase())
         || !payload.password.chars().any(|c| c.is_lowercase())
@@ -24,13 +42,10 @@ pub async fn register(
         ));
     }
 
-    // 检查邮箱是否已注册
-    let existing: Option<User> = sqlx::query_as(
-        "SELECT * FROM users WHERE email = $1"
-    )
-    .bind(&payload.email)
-    .fetch_optional(&state.db)
-    .await?;
+    let existing: Option<User> = sqlx::query_as("SELECT * FROM users WHERE email = $1")
+        .bind(&payload.email)
+        .fetch_optional(&state.db)
+        .await?;
 
     if existing.is_some() {
         return Err(AppError::BadRequest("Email already registered".to_string()));
@@ -50,7 +65,6 @@ pub async fn register(
     .fetch_one(&state.db)
     .await?;
 
-    // Auto-create default free subscription for new users so quota checks always work
     sqlx::query(
         "INSERT INTO subscriptions (user_id, tier, status, max_devices, ai_quota_daily, backtest_quota_daily)
          VALUES ($1, 'free', 'active', 1, 5, 10)
@@ -59,12 +73,11 @@ pub async fn register(
     .bind(user.id)
     .execute(&state.db)
     .await
-    .ok(); // NON-FATAL: missing subscription is handled by default quotas downstream
+    .ok();
 
     let access_token = create_access_token(user.id, &state.settings)?;
     let (refresh_token, jti, family) = create_refresh_token(user.id, None, &state.settings)?;
 
-    // 存储 refresh token
     sqlx::query(
         "INSERT INTO refresh_tokens (user_id, token_jti, family_id, expires_at) VALUES ($1, $2, $3, NOW() + INTERVAL '7 days')"
     )
@@ -74,23 +87,17 @@ pub async fn register(
     .execute(&state.db)
     .await?;
 
-    Ok(Json(serde_json::json!({
-        "status": "ok",
-        "access_token": access_token,
-        "refresh_token": refresh_token,
-    })))
+    Ok(token_response(&access_token, &refresh_token))
 }
 
 pub async fn login(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<UserLogin>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let user: Option<User> = sqlx::query_as(
-        "SELECT * FROM users WHERE email = $1"
-    )
-    .bind(&payload.email)
-    .fetch_optional(&state.db)
-    .await?;
+) -> Result<Response, AppError> {
+    let user: Option<User> = sqlx::query_as("SELECT * FROM users WHERE email = $1")
+        .bind(&payload.email)
+        .fetch_optional(&state.db)
+        .await?;
 
     let user = match user {
         Some(u) if verify_password(&payload.password, &u.password_hash)? => u,
@@ -109,17 +116,13 @@ pub async fn login(
     .execute(&state.db)
     .await?;
 
-    Ok(Json(serde_json::json!({
-        "status": "ok",
-        "access_token": access_token,
-        "refresh_token": refresh_token,
-    })))
+    Ok(token_response(&access_token, &refresh_token))
 }
 
 pub async fn refresh(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<serde_json::Value>,
-) -> Result<Json<serde_json::Value>, AppError> {
+) -> Result<Response, AppError> {
     let refresh_token = payload.get("refresh_token")
         .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::Auth("Missing refresh token".to_string()))?;
@@ -132,9 +135,6 @@ pub async fn refresh(
     let user_id = Uuid::parse_str(&claims.sub)
         .map_err(|_| AppError::Auth("Invalid user ID".to_string()))?;
 
-    // Use FOR UPDATE to prevent TOCTOU race: two concurrent refresh requests with
-    // the same token will now conflict on the row lock. The first one revokes the
-    // token and succeeds; the second sees it revoked and gets an error.
     let tx_result = sqlx::query_as::<_, (bool,)>(
         "SELECT revoked FROM refresh_tokens WHERE token_jti = $1 FOR UPDATE",
     )
@@ -145,7 +145,6 @@ pub async fn refresh(
     let (is_revoked,): (bool,) = match tx_result {
         Ok(Some((revoked,))) => (revoked,),
         Ok(None) => {
-            // Token not found — revoke entire family as a precaution
             sqlx::query("UPDATE refresh_tokens SET revoked = true WHERE family_id = $1")
                 .bind(&claims.family)
                 .execute(&state.db)
@@ -168,13 +167,11 @@ pub async fn refresh(
         return Err(AppError::Auth("Refresh token has been revoked".to_string()));
     }
 
-    // Mark old token as revoked
     sqlx::query("UPDATE refresh_tokens SET revoked = true WHERE token_jti = $1")
         .bind(&claims.jti)
         .execute(&state.db)
         .await?;
 
-    // Generate new token pair
     let access_token = create_access_token(user_id, &state.settings)?;
     let (new_refresh_token, new_jti, new_family) =
         create_refresh_token(user_id, Some(claims.family), &state.settings)?;
@@ -188,17 +185,13 @@ pub async fn refresh(
     .execute(&state.db)
     .await?;
 
-    Ok(Json(serde_json::json!({
-        "status": "ok",
-        "access_token": access_token,
-        "refresh_token": new_refresh_token,
-    })))
+    Ok(token_response(&access_token, &new_refresh_token))
 }
 
 pub async fn logout(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<serde_json::Value>,
-) -> Result<Json<serde_json::Value>, AppError> {
+) -> Result<Response, AppError> {
     if let Some(token) = payload.get("refresh_token").and_then(|v| v.as_str()) {
         if let Ok(claims) = decode_token(token, &state.settings) {
             if let Some(family) = payload.get("family").and_then(|v| v.as_str()) {
@@ -215,7 +208,10 @@ pub async fn logout(
         }
     }
 
-    Ok(Json(serde_json::json!({"status": "ok"})))
+    let mut response = Json(serde_json::json!({"status": "ok"})).into_response();
+    response.headers_mut().append("set-cookie", "acda_access=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0".parse().unwrap());
+    response.headers_mut().append("set-cookie", "acda_refresh=; Path=/api/v1/auth; HttpOnly; SameSite=Lax; Max-Age=0".parse().unwrap());
+    Ok(response)
 }
 
 pub async fn get_me(

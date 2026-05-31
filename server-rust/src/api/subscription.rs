@@ -94,6 +94,16 @@ pub async fn register_device(
     current_user: CurrentUser,
     Json(payload): Json<DeviceRegisterPayload>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    // 自动吊销超过 30 天无心跳的设备
+    let _ = sqlx::query(
+        "UPDATE user_devices SET is_active = false, revoked_at = NOW()
+         WHERE user_id = $1 AND is_active = true AND revoked_at IS NULL
+           AND last_heartbeat_at < NOW() - INTERVAL '30 days'"
+    )
+    .bind(current_user.id)
+    .execute(&state.db)
+    .await;
+
     // 检查设备数量限制
     let active_count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM user_devices WHERE user_id = $1 AND is_active = true AND revoked_at IS NULL"
@@ -182,6 +192,29 @@ pub async fn revoke_device(
 
     let result = sqlx::query(
         "UPDATE user_devices SET is_active = false, revoked_at = NOW() WHERE id = $1 AND user_id = $2"
+    )
+    .bind(device_id)
+    .bind(current_user.id)
+    .execute(&state.db)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound("Device not found".to_string()));
+    }
+
+    Ok(Json(serde_json::json!({"status": "ok"})))
+}
+
+pub async fn delete_device(
+    State(state): State<Arc<AppState>>,
+    current_user: CurrentUser,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let device_id = Uuid::parse_str(&id)
+        .map_err(|_| AppError::BadRequest("Invalid device ID".to_string()))?;
+
+    let result = sqlx::query(
+        "DELETE FROM user_devices WHERE id = $1 AND user_id = $2"
     )
     .bind(device_id)
     .bind(current_user.id)

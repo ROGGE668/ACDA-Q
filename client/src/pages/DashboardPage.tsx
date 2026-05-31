@@ -5,14 +5,16 @@ import { useStrategyStore } from "../stores/strategyStore";
 import { useBacktestStore } from "../stores/backtestStore";
 import { backtestAPI } from "../services/api";
 import StockSelector from "../components/StockSelector";
+import { useToast } from "../components/Toast";
 
 export default function DashboardPage() {
   const navigate = useNavigate();
   const { user } = useAuthStore();
-  const { strategies, fetchStrategies } = useStrategyStore();
-  const { jobs, fetchJobs } = useBacktestStore();
+  const { strategies } = useStrategyStore();
+  const { jobs } = useBacktestStore();
 
   const [showQuickBacktest, setShowQuickBacktest] = useState(false);
+  const { toast } = useToast();
   const [qbStrategy, setQbStrategy] = useState("");
   const [qbStart, setQbStart] = useState("2024-01-01");
   const [qbEnd, setQbEnd] = useState("2024-06-01");
@@ -23,9 +25,9 @@ export default function DashboardPage() {
   const [qbSubmitting, setQbSubmitting] = useState(false);
 
   useEffect(() => {
-    fetchStrategies();
-    fetchJobs();
-  }, [fetchStrategies, fetchJobs]);
+    useStrategyStore.getState().fetchStrategies();
+    useBacktestStore.getState().fetchJobs();
+  }, []);
 
   const successJobs = jobs.filter((j) => j.status === "success").length;
   const failedJobs = jobs.filter((j) => j.status === "failed").length;
@@ -38,11 +40,11 @@ export default function DashboardPage() {
 
   const submitQuickBacktest = async () => {
     if (!qbStrategy) {
-      alert("请选择策略");
+      toast("请选择策略", "error");
       return;
     }
     if (!qbFullMarket && qbSelectedStocks.length === 0) {
-      alert("请至少选择一只股票，或开启全市场扫描");
+      toast("请至少选择一只股票，或开启全市场扫描", "error");
       return;
     }
     setQbSubmitting(true);
@@ -56,7 +58,7 @@ export default function DashboardPage() {
       });
       navigate(`/backtests/${data.id}`);
     } catch (e: any) {
-      alert(e.response?.data?.detail || "回测提交失败");
+      toast(e.response?.data?.error || e.response?.data?.detail || "回测提交失败", "error");
     } finally {
       setQbSubmitting(false);
     }

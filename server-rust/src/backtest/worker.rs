@@ -345,6 +345,27 @@ impl Worker<BacktestPayload> for BacktestWorker {
                 .ok();
 
             let exchange = payload.params.get("exchange").and_then(|v| v.as_str()).unwrap_or("cn");
+            let exclude_st = payload.params.get("exclude_st").and_then(|v| v.as_bool()).unwrap_or(false);
+
+            // 创建进度通道：scanner 读取 Python stderr → 通过 channel → 发布到 Redis
+            let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel::<scanner::ScanProgressInfo>(64);
+            let job_id_progress = job_id_str.clone();
+            let queue_progress = self.queue.clone();
+            let progress_forwarder = tokio::spawn(async move {
+                while let Some(info) = progress_rx.recv().await {
+                    // 将 Python 扫描进度 (0-100%) 映射到总进度 (50%-80%)
+                    let overall = 0.5 + (info.progress / 100.0) * 0.3;
+                    let _ = queue_progress.publish_progress_detail(
+                        &job_id_progress,
+                        overall,
+                        &info.message,
+                        "running",
+                        info.elapsed_secs,
+                        info.eta_secs,
+                    ).await;
+                }
+            });
+
             let (results, total_scanned) = scanner::scan_market(
                 &self.db,
                 &self.ts_db,
@@ -356,9 +377,14 @@ impl Worker<BacktestPayload> for BacktestWorker {
                 &payload.start_date,
                 &payload.end_date,
                 initial_cash.to_string().parse().unwrap_or(1_000_000.0),
+                Some(progress_tx),
+                exclude_st,
             )
             .await
             .map_err(|e| format!("Scan failed: {}", e))?;
+
+            // 等待进度转发完成
+            let _ = progress_forwarder.await;
 
             let suitable_count = results.len();
             let avg_return = if suitable_count > 0 {

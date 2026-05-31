@@ -1,7 +1,7 @@
 {
   "name": "quant-client",
   "private": true,
-  "version": "0.2.4",
+  "version": "0.2.7",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,17 +10,15 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@fingerprintjs/fingerprintjs": "^5.2.0",
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-http": "^2.5.8",
     "@tauri-apps/plugin-shell": "^2.0.0",
     "@tauri-apps/plugin-store": "^2.4.2",
-    "axios": "^1.6.5",
     "lightweight-charts": "^5.2.0",
-    "prismjs": "^1.29.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.21.0",
-    "recharts": "^2.10.4",
     "zustand": "^4.4.7"
   },
   "devDependencies": {

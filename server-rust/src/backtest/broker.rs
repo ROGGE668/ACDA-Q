@@ -155,8 +155,8 @@ impl Broker {
 
             self.last_prices.insert(order.symbol.clone(), close);
 
-            // 涨跌停检查
-            if self.enable_limit && pre_close > dec!(0) {
+            // 涨跌停检查（新上市首日跳过：pre_close == close 时涨跌幅为 0）
+            if self.enable_limit && pre_close > dec!(0) && pre_close != close {
                 let pct = limit_pct(&order.symbol, bar.is_st);
                 let limit_up = pre_close * (Decimal::ONE + pct);
                 let limit_down = pre_close * (Decimal::ONE - pct);

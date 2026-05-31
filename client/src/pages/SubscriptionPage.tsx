@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { subscriptionAPI, deviceAPI, paymentAPI } from "../services/api";
+import { useToast } from "../components/Toast";
 
 interface SubscriptionStatus {
   tier: string;
@@ -28,6 +29,7 @@ export default function SubscriptionPage() {
   const [sub, setSub] = useState<SubscriptionStatus | null>(null);
   const [devices, setDevices] = useState<Device[]>([]);
   const [loading, setLoading] = useState(true);
+  const { toast } = useToast();
   const [selectedTier, setSelectedTier] = useState<"basic" | "pro" | "max">("pro");
   const [selectedDuration, setSelectedDuration] = useState(1);
   const [selectedChannel, setSelectedChannel] = useState<"alipay" | "wechat">("alipay");
@@ -59,7 +61,18 @@ export default function SubscriptionPage() {
       await deviceAPI.revoke(id);
       setDevices((prev) => prev.map((d) => (d.id === id ? { ...d, is_active: false, revoked_at: new Date().toISOString() } : d)));
     } catch (e: any) {
-      alert(e.response?.data?.detail || "吊销失败");
+      toast(e.response?.data?.error || e.response?.data?.detail || "吊销失败", "error");
+    }
+  };
+
+  const deleteDevice = async (id: string) => {
+    if (!confirm("确定删除该设备记录？删除后不可恢复。")) return;
+    try {
+      await deviceAPI.delete(id);
+      setDevices((prev) => prev.filter((d) => d.id !== id));
+      toast("设备已删除", "success");
+    } catch (e: any) {
+      toast(e.response?.data?.error || e.response?.data?.detail || "删除失败", "error");
     }
   };
 
@@ -71,9 +84,9 @@ export default function SubscriptionPage() {
         tier: selectedTier,
         duration_months: selectedDuration,
       });
-      alert(`订单已创建: ${data.order_no}\n请使用 ${selectedChannel === "alipay" ? "支付宝" : "微信"} 扫码支付`);
+      toast(`订单已创建: ${data.order_no}`, "success");
     } catch (e: any) {
-      alert(e.response?.data?.detail || "创建订单失败");
+      toast(e.response?.data?.error || e.response?.data?.detail || "创建订单失败", "error");
     } finally {
       setPaying(false);
     }
@@ -160,17 +173,22 @@ export default function SubscriptionPage() {
           {devices.map((d) => (
             <div key={d.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0.5rem", border: "1px solid var(--border)", borderRadius: "0.375rem" }}>
               <div>
-                <p style={{ fontWeight: 500 }}>{d.device_name || "未命名设备"} <span style={{ fontSize: "0.75rem", color: "var(--muted)" }}>({d.os_type})</span></p>
-                <p style={{ fontSize: "0.75rem", color: "var(--muted)" }}>指纹: {d.device_fingerprint.slice(0, 16)}...</p>
+                <p style={{ fontWeight: 500 }}>{d.device_name || "未命名设备"} <span style={{ fontSize: "0.75rem", color: "var(--muted)" }}>({d.os_type || "未知系统"})</span></p>
+                <p style={{ fontSize: "0.75rem", color: "var(--muted)" }}>设备ID: {d.device_fingerprint.slice(0, 8)}...{d.device_fingerprint.slice(-6)}</p>
                 <p style={{ fontSize: "0.75rem", color: d.is_active ? "#22c55e" : "#ef4444" }}>
                   {d.is_active ? "活跃" : "已吊销"} · 最后心跳: {d.last_heartbeat_at ? new Date(d.last_heartbeat_at).toLocaleString() : "无"}
                 </p>
               </div>
-              {d.is_active && !d.revoked_at && (
-                <button className="secondary" onClick={() => revokeDevice(d.id)} style={{ color: "#ef4444", borderColor: "#7f1d1d" }}>
-                  吊销
+              <div style={{ display: "flex", gap: "0.5rem" }}>
+                {d.is_active && !d.revoked_at && (
+                  <button className="secondary" onClick={() => revokeDevice(d.id)} style={{ color: "#ef4444", borderColor: "#7f1d1d" }}>
+                    吊销
+                  </button>
+                )}
+                <button className="secondary" onClick={() => deleteDevice(d.id)} style={{ color: "var(--muted)", fontSize: "0.75rem" }}>
+                  删除
                 </button>
-              )}
+              </div>
             </div>
           ))}
           {devices.length === 0 && <p style={{ color: "var(--muted)", fontSize: "0.875rem" }}>暂无注册设备</p>}

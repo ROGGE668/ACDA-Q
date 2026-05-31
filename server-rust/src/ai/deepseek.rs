@@ -219,33 +219,25 @@ class Strategy(BaseStrategy):
     }
 
     /// 从策略代码中提取参数定义（简单正则式解析）
-    pub fn extract_params(&self,
-        code: &str,
-    ) -> Vec<ParamDefinition> {
+    pub fn extract_params(&self, code: &str) -> Vec<ParamDefinition> {
         let mut params = Vec::new();
-
-        // Simple regex-like parsing for self.params.get("key", default)
-        for line in code.lines() {
-            let line = line.trim();
-            if line.contains("self.params.get(") {
-                if let Some(start) = line.find("\"") {
-                    let rest = &line[start + 1..];
-                    if let Some(end) = rest.find("\"") {
-                        let key = &rest[..end];
-
-                        // Try to infer type from default value
+        let mut seen = std::collections::HashSet::new();
+        let normalized: String = code.lines().map(|l| l.trim()).collect::<Vec<_>>().join(" ");
+        let mut search_text = normalized.as_str();
+        while let Some(pos) = search_text.find("self.params.get(") {
+            let after = &search_text[pos + 16..];
+            if let Some(start) = after.find("\"") {
+                let rest = &after[start + 1..];
+                if let Some(end) = rest.find("\"") {
+                    let key = &rest[..end];
+                    if seen.insert(key.to_string()) {
                         let default = if let Some(comma_pos) = rest[end..].find(",") {
                             let after_comma = rest[end + comma_pos + 1..].trim();
-                            after_comma
-                                .trim_end_matches(")")
-                                .trim()
-                                .to_string()
+                            after_comma.trim_end_matches(")").trim().to_string()
                         } else {
                             "null".to_string()
                         };
-
                         let param_type = infer_type(&default);
-
                         params.push(ParamDefinition {
                             name: key.to_string(),
                             param_type,
@@ -255,8 +247,8 @@ class Strategy(BaseStrategy):
                     }
                 }
             }
+            search_text = &search_text[pos + 16..];
         }
-
         params
     }
 }

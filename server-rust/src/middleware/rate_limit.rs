@@ -27,7 +27,7 @@ pub struct RateLimitConfig {
 impl RateLimitConfig {
     pub fn backtest() -> Self {
         Self {
-            max_requests: 10,
+            max_requests: 60,
             window_seconds: 60,
             key_prefix: "rl:backtest".to_string(),
         }
@@ -35,7 +35,7 @@ impl RateLimitConfig {
 
     pub fn ai() -> Self {
         Self {
-            max_requests: 5,
+            max_requests: 30,
             window_seconds: 60,
             key_prefix: "rl:ai".to_string(),
         }
@@ -48,6 +48,14 @@ impl RateLimitConfig {
             key_prefix: "rl:auth".to_string(),
         }
     }
+
+    pub fn admin() -> Self {
+        Self {
+            max_requests: 60,
+            window_seconds: 60,
+            key_prefix: "rl:admin".to_string(),
+        }
+    }
 }
 
 /// 限流中间件共享状态
@@ -55,6 +63,14 @@ impl RateLimitConfig {
 pub struct RateLimitState {
     pub redis_url: String,
     pub config: RateLimitConfig,
+    pub redis_client: Option<Arc<redis::Client>>,
+}
+
+impl RateLimitState {
+    pub fn new(redis_url: String, config: RateLimitConfig) -> Self {
+        let redis_client = redis::Client::open(redis_url.as_str()).ok().map(Arc::new);
+        Self { redis_url, config, redis_client }
+    }
 }
 
 /// 限流中间件
@@ -64,19 +80,20 @@ pub async fn rate_limit_middleware(
     request: Request,
     next: Next,
 ) -> Result<Response, RateLimitError> {
-    let client = redis::Client::open(state.redis_url.as_str())
-        .map_err(|e| {
-            tracing::error!("Redis connection failed: {}", e);
-            RateLimitError::Internal
-        })?;
-
-    let mut conn = client
-        .get_multiplexed_async_connection()
-        .await
-        .map_err(|e| {
-            tracing::error!("Redis connection failed: {}", e);
-            RateLimitError::Internal
-        })?;
+    let mut conn = if let Some(ref client) = state.redis_client {
+        client.get_multiplexed_async_connection().await
+    } else {
+        let client = redis::Client::open(state.redis_url.as_str())
+            .map_err(|e| {
+                tracing::error!("Redis connection failed: {}", e);
+                RateLimitError::Internal
+            })?;
+        client.get_multiplexed_async_connection().await
+    }
+    .map_err(|e| {
+        tracing::error!("Redis connection failed: {}", e);
+        RateLimitError::Internal
+    })?;
 
     // 优先从 extension 中的 CurrentUser 取 user_id，fallback 到 IP
     let key = request

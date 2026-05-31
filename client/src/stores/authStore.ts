@@ -1,8 +1,8 @@
 import { create } from "zustand";
-import { invoke } from "@tauri-apps/api/core";
 import { persist } from "zustand/middleware";
 import { authAPI, deviceAPI } from "../services/api";
 import { setTokens, clearTokens, getAccessToken } from "./tokenStore";
+import { getDeviceFingerprint } from "../utils/fingerprint";
 
 interface User {
   id: string;
@@ -19,6 +19,7 @@ interface AuthState {
   user: User | null;
   isAuthenticated: boolean;
   isLoading: boolean;
+  lastAuthCheck: number;
   init: () => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, password: string, nickname?: string) => Promise<void>;
@@ -32,6 +33,7 @@ export const useAuthStore = create<AuthState>()(
       user: null,
       isAuthenticated: false,
       isLoading: false,
+      lastAuthCheck: 0,
 
       init: async () => {
         const token = await getAccessToken();
@@ -66,16 +68,11 @@ export const useAuthStore = create<AuthState>()(
 
       logout: async () => {
         const currentPath = window.location.pathname;
-        // 清理 token 和状态
         await clearTokens();
         set({ user: null, isAuthenticated: false });
-        // authAPI.logout 失败不阻止登出
         try {
           await authAPI.logout();
-        } catch (_) {
-          // ignore
-        }
-        // 只有当前不在 login 页时才跳转
+        } catch (_) {}
         if (currentPath !== "/login") {
           window.location.href = "/login";
         }
@@ -84,39 +81,41 @@ export const useAuthStore = create<AuthState>()(
       fetchUser: async () => {
         try {
           const res = await authAPI.me();
-          set({ user: res.data, isAuthenticated: true });
-          // 登录成功后自动注册设备
+          set({ user: res.data, isAuthenticated: true, lastAuthCheck: Date.now() });
           await registerDeviceIfNeeded();
         } catch (e: any) {
-          // 区分 401（token 过期需登出）和其他错误（网络错误可重试，不登出）
+          // 任何错误都清除用户状态，让 PrivateRoute 跳转登录
+          set({ user: null, isAuthenticated: false });
           if (e?.response?.status === 401) {
-            set({ user: null, isAuthenticated: false });
             await clearTokens();
           }
-          // 网络错误或其他错误不登出，静默保持未认证状态
         }
       },
     }),
     {
       name: "auth-store",
-      partialize: (state) => ({ user: state.user, isAuthenticated: state.isAuthenticated }),
+      partialize: (state) => ({ user: state.user, isAuthenticated: state.isAuthenticated, lastAuthCheck: state.lastAuthCheck }),
+      onRehydrateStorage: () => (state) => {
+        if (state) {
+          const { isAuthenticated, lastAuthCheck } = state;
+          const DAY_MS = 24 * 60 * 60 * 1000;
+          if (isAuthenticated && (!lastAuthCheck || Date.now() - lastAuthCheck > DAY_MS)) {
+            state.isAuthenticated = false;
+            state.user = null;
+          }
+        }
+      },
     }
   )
 );
 
 async function registerDeviceIfNeeded() {
   try {
-    let fingerprint: string;
-    try {
-      fingerprint = await invoke<string>("get_device_fingerprint");
-    } catch (e) {
-      // 非 Tauri 环境使用降级指纹
-      fingerprint = `${navigator.userAgent}|${screen.width}x${screen.height}|${navigator.language}`;
-    }
+    const fingerprint = await getDeviceFingerprint();
     await deviceAPI.register({
       device_fingerprint: fingerprint,
-      device_name: "ACDA-Quant Client",
-      device_type: "desktop",
+      device_name: navigator.userAgent.includes("Codex") ? "ACDA-Quant Desktop" : "ACDA-Quant Web",
+      os_type: navigator.platform || "unknown",
     });
   } catch (e) {
     console.warn("[Device] register failed:", e);

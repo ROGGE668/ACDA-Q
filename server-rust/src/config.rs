@@ -132,13 +132,45 @@ impl Settings {
     }
 
     pub fn secret_key_bytes(&self) -> Vec<u8> {
-        self.secret_key.as_bytes().to_vec()
+        // Cache: derive once per Settings instance (Settings is Arc'd, so this is effectively per-process)
+        use std::sync::OnceLock;
+        static CACHED: OnceLock<Vec<u8>> = OnceLock::new();
+        CACHED.get_or_init(|| self.secret_key.as_bytes().to_vec()).clone()
     }
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self::new().expect("Failed to load default settings")
+        Self::new().unwrap_or_else(|e| {
+            eprintln!("FATAL: Failed to load default settings: {}. Using emergency fallback.", e);
+            Settings {
+                app_name: "ACDA-Q".to_string(),
+                debug: false,
+                host: "0.0.0.0".to_string(),
+                port: 8000,
+                database_url: std::env::var("DATABASE_URL").unwrap_or_default(),
+                sync_database_url: std::env::var("SYNC_DATABASE_URL").unwrap_or_default(),
+                timescale_database_url: std::env::var("TIMESCALE_DATABASE_URL").unwrap_or_default(),
+                redis_url: std::env::var("REDIS_URL").unwrap_or_default(),
+                secret_key: std::env::var("SECRET_KEY").unwrap_or_else(|_| "CHANGE_ME_IN_PRODUCTION_32_CHARS_MINIMUM!".to_string()),
+                access_token_expire_minutes: 30,
+                refresh_token_expire_days: 7,
+                cors_origins: "*".to_string(),
+                cookie_secure: false,
+                deepseek_api_key: std::env::var("DEEPSEEK_API_KEY").unwrap_or_default(),
+                deepseek_base_url: "https://api.deepseek.com".to_string(),
+                deepseek_model: "deepseek-chat".to_string(),
+                backtest_commission: rust_decimal::Decimal::new(3, 4),
+                backtest_slippage: rust_decimal::Decimal::new(1, 3),
+                backtest_stamp_duty: rust_decimal::Decimal::new(5, 4),
+                backtest_transfer_fee: rust_decimal::Decimal::new(1, 5),
+                backtest_risk_free_rate: rust_decimal::Decimal::new(2, 2),
+                minio_endpoint: "localhost:9000".to_string(),
+                minio_access_key: std::env::var("MINIO_ACCESS_KEY").unwrap_or_default(),
+                minio_secret_key: std::env::var("MINIO_SECRET_KEY").unwrap_or_default(),
+                tushare_token: std::env::var("TUSHARE_TOKEN").unwrap_or_default(),
+            }
+        })
     }
 }
 

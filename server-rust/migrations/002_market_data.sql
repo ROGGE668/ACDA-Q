@@ -1,7 +1,13 @@
 -- 002_market_data.sql — TimescaleDB 行情数据表
 
--- 加载 TimescaleDB 扩展
-CREATE EXTENSION IF NOT EXISTS timescaledb;
+-- 加载 TimescaleDB 扩展（仅在扩展可用时执行）
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'timescaledb') THEN
+    CREATE EXTENSION IF NOT EXISTS timescaledb;
+  END IF;
+END
+$$;
 
 -- 股票基础信息表
 CREATE TABLE IF NOT EXISTS stock_basic (
@@ -31,7 +37,11 @@ CREATE TABLE IF NOT EXISTS daily_bars (
     PRIMARY KEY (symbol, datetime)
 );
 
-SELECT create_hypertable('daily_bars', 'datetime', if_not_exists => TRUE);
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'timescaledb') THEN
+    PERFORM create_hypertable('daily_bars', 'datetime', if_not_exists => TRUE);
+  END IF;
+END $$;
 
 -- 分钟K线数据 hypertable
 CREATE TABLE IF NOT EXISTS minute_bars (
@@ -46,7 +56,11 @@ CREATE TABLE IF NOT EXISTS minute_bars (
     PRIMARY KEY (symbol, datetime)
 );
 
-SELECT create_hypertable('minute_bars', 'datetime', if_not_exists => TRUE);
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'timescaledb') THEN
+    PERFORM create_hypertable('minute_bars', 'datetime', if_not_exists => TRUE);
+  END IF;
+END $$;
 
 -- 复权因子表
 CREATE TABLE IF NOT EXISTS adj_factors (
@@ -77,3 +91,18 @@ CREATE INDEX IF NOT EXISTS idx_daily_bars_symbol ON daily_bars(symbol, datetime 
 CREATE INDEX IF NOT EXISTS idx_minute_bars_symbol ON minute_bars(symbol, datetime DESC);
 CREATE INDEX IF NOT EXISTS idx_stock_basic_industry ON stock_basic(industry);
 CREATE INDEX IF NOT EXISTS idx_backtest_cache_expires ON backtest_cache(expires_at);
+
+-- TimescaleDB 压缩策略：7 天后自动压缩
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'timescaledb') THEN
+    ALTER TABLE daily_bars SET (timescaledb.compress, timescaledb.compress_segmentby = 'symbol');
+    PERFORM add_compression_policy('daily_bars', INTERVAL '7 days', if_not_exists => TRUE);
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'timescaledb') THEN
+    ALTER TABLE minute_bars SET (timescaledb.compress, timescaledb.compress_segmentby = 'symbol');
+    PERFORM add_compression_policy('minute_bars', INTERVAL '7 days', if_not_exists => TRUE);
+  END IF;
+END $$;

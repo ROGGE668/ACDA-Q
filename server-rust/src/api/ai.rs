@@ -20,7 +20,7 @@ pub async fn generate_strategy(
     Json(payload): Json<AIGenerateRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     if state.settings.deepseek_api_key.is_empty() {
-        return Err(AppError::Internal("AI service not configured".to_string()));
+        return Err(AppError::Internal("AI 服务未配置".to_string()));
     }
 
     let client = DeepSeekClient::new(&state.settings.deepseek_api_key)

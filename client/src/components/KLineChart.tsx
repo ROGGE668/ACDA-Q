@@ -1,4 +1,4 @@
-import { useEffect, useRef, useMemo } from "react";
+import { useEffect, useRef, useMemo, useState } from "react";
 import {
   createChart,
   IChartApi,
@@ -6,10 +6,34 @@ import {
   HistogramSeries,
   LineSeries,
   ISeriesApi,
+  UTCTimestamp,
   createSeriesMarkers,
   ISeriesMarkersPluginApi,
 } from "lightweight-charts";
 
+
+
+interface ChartThemeColors {
+  bg: string;
+  surface: string;
+  text: string;
+  muted: string;
+  border: string;
+  crosshair: string;
+}
+
+function getChartThemeColors(): ChartThemeColors {
+  const isLight = document.documentElement.getAttribute("data-theme") === "light";
+  if (isLight) {
+    return { bg: "#f8fafc", surface: "#ffffff", text: "#0f172a", muted: "#64748b", border: "#e2e8f0", crosshair: "#6366f1" };
+  }
+  return { bg: "#0f172a", surface: "#1e293b", text: "#94a3b8", muted: "#94a3b8", border: "#334155", crosshair: "#38bdf8" };
+}
+
+function getSellTextColor(pnl: number, isLight: boolean): string {
+  if (isLight) return pnl >= 0 ? "#dc2626" : "#16a34a";
+  return pnl >= 0 ? "#ef4444" : "#22c55e";
+}
 interface KLineItem {
   datetime: string;
   open: number;
@@ -109,13 +133,13 @@ function resampleKline(data: KLineItem[], targetPeriod: string): KLineItem[] {
   return result;
 }
 
-function calcMA(data: KLineItem[], period: number): { time: number; value: number }[] {
-  const r: { time: number; value: number }[] = [];
+function calcMA(data: KLineItem[], period: number): { time: UTCTimestamp; value: number }[] {
+  const r: { time: UTCTimestamp; value: number }[] = [];
   for (let i = 0; i < data.length; i++) {
     if (i < period - 1) continue;
     let sum = 0;
     for (let j = i - period + 1; j <= i; j++) sum += Number(data[j].close) || 0;
-    r.push({ time: toTs(data[i].datetime), value: sum / period });
+    r.push({ time: toTs(data[i].datetime) as UTCTimestamp, value: sum / period });
   }
   return r;
 }
@@ -174,50 +198,54 @@ class TradeBackgroundPrimitive {
     this._requestUpdate = null;
   }
 
+  updateAllViews() {}
+
   update() {
     this._requestUpdate?.();
   }
 
-  renderer() {
-    return {
-      draw: (target: any) => {
-        try {
-          const chart = this._chart;
-          if (!chart) return;
-          const ranges = this._getRanges();
-          if (!ranges.length) return;
-
-          const timeScale = chart.timeScale();
-          const priceScale = chart.priceScale("right");
-
-          const seriesArr = typeof (chart as any).serieses === "function" ? (chart as any).serieses() : [];
-          const series = seriesArr[0];
-          if (!series) return;
-
-          for (const range of ranges) {
-            const x1 = timeScale.timeToCoordinate(toTs(range.startTime) as any);
-            const x2 = timeScale.timeToCoordinate(toTs(range.endTime) as any);
-            if (x1 === null || x2 === null) continue;
-
-            const data0 = series.data()?.[0];
-            if (!data0) continue;
-            const yTop = (priceScale as any).priceToCoordinate((series as any).priceToCoordinate(data0.high ?? 100) ?? 0);
-            const yBottom = (priceScale as any).priceToCoordinate((series as any).priceToCoordinate(data0.low ?? 0) ?? 100);
-            if (yTop === null || yBottom === null) continue;
-
-            target.rect(
-              { x: Math.min(x1, x2), y: Math.min(yTop, yBottom) },
-              { width: Math.abs(x2 - x1), height: Math.abs(yBottom - yTop) },
-              range.color
-            );
-          }
-        } catch (_) {}
+  paneViews() {
+    const self = this;
+    return [{
+      zOrder() { return 'bottom'; },
+      renderer() {
+        return {
+          draw(target: any) {
+            target.useMediaCoordinateSpace(({ context, mediaSize }: any) => {
+              try {
+                const chart = self._chart;
+                if (!chart) return;
+                const ranges = self._getRanges();
+                if (!ranges.length) return;
+                const timeScale = chart.timeScale();
+                for (const range of ranges) {
+                  const x1 = timeScale.timeToCoordinate(toTs(range.startTime) as UTCTimestamp);
+                  const x2 = timeScale.timeToCoordinate(toTs(range.endTime) as UTCTimestamp);
+                  if (x1 === null || x2 === null) continue;
+                  const left = Math.min(x1, x2);
+                  const width = Math.abs(x2 - x1);
+                  if (width <= 0) continue;
+                  context.fillStyle = range.color;
+                  context.fillRect(left, 0, width, mediaSize.height);
+                }
+              } catch (_) {}
+            });
+          },
+        };
       },
-    };
+    }];
   }
 }
 
 export default function KLineChart({ data, trades = [], height = 400, period = "1d", onPeriodChange }: KLineChartProps) {
+  const [theme, setTheme] = useState<"dark" | "light">(() => (document.documentElement.getAttribute("data-theme") as "dark" | "light") || "dark");
+  useEffect(() => {
+    const obs = new MutationObserver(() => {
+      setTheme((document.documentElement.getAttribute("data-theme") as "dark" | "light") || "dark");
+    });
+    obs.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    return () => obs.disconnect();
+  }, []);
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -293,19 +321,20 @@ export default function KLineChart({ data, trades = [], height = 400, period = "
 
     let chart: IChartApi;
     try {
+      const tc = getChartThemeColors();
       chart = createChart(chartContainerRef.current, {
         height,
-        layout: { background: { color: "#0f172a" }, textColor: "#94a3b8", fontFamily: "-apple-system, BlinkMacSystemFont, PingFang SC, Microsoft YaHei, sans-serif" },
+        layout: { background: { color: tc.bg }, textColor: tc.muted, fontFamily: "-apple-system, BlinkMacSystemFont, PingFang SC, Microsoft YaHei, sans-serif" },
         localization: { locale: "zh-CN" },
-        grid: { vertLines: { color: "#1e293b" }, horzLines: { color: "#1e293b" } },
+        grid: { vertLines: { color: tc.surface }, horzLines: { color: tc.surface } },
         crosshair: {
           mode: 1,
-          vertLine: { color: "#38bdf8", labelBackgroundColor: "#38bdf8" },
-          horzLine: { color: "#38bdf8", labelBackgroundColor: "#38bdf8" },
+          vertLine: { color: tc.crosshair, labelBackgroundColor: tc.crosshair },
+          horzLine: { color: tc.crosshair, labelBackgroundColor: tc.crosshair },
         },
-        rightPriceScale: { borderColor: "#334155" },
+        rightPriceScale: { borderColor: tc.border },
         timeScale: {
-          borderColor: "#334155",
+          borderColor: tc.border,
           timeVisible: true,
           secondsVisible: false,
           fixLeftEdge: true,
@@ -327,16 +356,16 @@ export default function KLineChart({ data, trades = [], height = 400, period = "
       priceLineVisible: false,
       lastValueVisible: false,
     });
-    candleRef.current = candleSeries as any;
+    candleRef.current = candleSeries;
 
     candleSeries.setData(
       displayData.map((d) => ({
-        time: toTs(d.datetime) as any,
+        time: toTs(d.datetime) as UTCTimestamp,
         open: Number(d.open) || 0,
         high: Number(d.high) || 0,
         low: Number(d.low) || 0,
         close: Number(d.close) || 0,
-      })) as any
+      }))
     );
 
     // MA
@@ -349,7 +378,7 @@ export default function KLineChart({ data, trades = [], height = 400, period = "
           priceLineVisible: false,
           lastValueVisible: false,
         } as any)
-        .setData(ma5 as any);
+        .setData(ma5);
     const ma10 = calcMA(displayData, 10);
     if (ma10.length)
       chart
@@ -359,7 +388,7 @@ export default function KLineChart({ data, trades = [], height = 400, period = "
           priceLineVisible: false,
           lastValueVisible: false,
         } as any)
-        .setData(ma10 as any);
+        .setData(ma10);
     const ma20 = calcMA(displayData, 20);
     if (ma20.length)
       chart
@@ -369,7 +398,7 @@ export default function KLineChart({ data, trades = [], height = 400, period = "
           priceLineVisible: false,
           lastValueVisible: false,
         } as any)
-        .setData(ma20 as any);
+        .setData(ma20);
 
     // 成交量
     if (displayData[0]?.volume !== undefined) {
@@ -383,10 +412,10 @@ export default function KLineChart({ data, trades = [], height = 400, period = "
       volSeries.priceScale().applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
       volSeries.setData(
         displayData.map((d) => ({
-          time: toTs(d.datetime) as any,
+          time: toTs(d.datetime) as UTCTimestamp,
           value: Number(d.volume) || 0,
           color: (Number(d.close) || 0) >= (Number(d.open) || 0) ? "#ef4444" : "#22c55e",
-        })) as any
+        }))
       );
     }
 
@@ -419,7 +448,7 @@ export default function KLineChart({ data, trades = [], height = 400, period = "
       chartRef.current = null;
       candleRef.current = null;
     };
-  }, [dataFp, displayData, height, normalizedPeriod]);
+  }, [dataFp, displayData, height, normalizedPeriod, theme]);
 
   // 交易标记 + 持有区间背景（独立更新，不重建 chart）
   useEffect(() => {
@@ -456,9 +485,9 @@ export default function KLineChart({ data, trades = [], height = 400, period = "
       const days = holdingDaysMap.get(t.time);
       const daysText = !isBuy && days !== undefined ? `(${days}天)` : "";
       return {
-        time: t._snapTs as any,
+        time: t._snapTs as UTCTimestamp,
         position: isBuy ? ("belowBar" as const) : ("aboveBar" as const),
-        color: isBuy ? "#ffffff" : p >= 0 ? "#ef4444" : "#22c55e",
+        color: isBuy ? (theme === "light" ? "#1e293b" : "#ffffff") : getSellTextColor(p, theme === "light"),
         shape: isBuy ? ("arrowUp" as const) : ("arrowDown" as const),
         text: isBuy
           ? "买"
@@ -470,7 +499,7 @@ export default function KLineChart({ data, trades = [], height = 400, period = "
   }, [snappedTrades, candleTimes]);
 
   if (displayData.length === 0) {
-    return <div style={{ color: "#94a3b8", padding: "2rem", textAlign: "center" }}>暂无 K 线数据</div>;
+    return <div style={{ color: "var(--muted)", padding: "2rem", textAlign: "center" }}>暂无 K 线数据</div>;
   }
   return (
     <div>

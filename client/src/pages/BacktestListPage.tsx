@@ -1,18 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { backtestAPI, strategyAPI } from "../services/api";
+import { backtestAPI, strategyAPI, type BacktestJob } from "../services/api";
 import StockSelector from "../components/StockSelector";
-
-interface BacktestJob {
-  id: string;
-  status: string;
-  scope?: string;
-  symbols?: string[];
-  start_date?: string;
-  end_date?: string;
-  result_summary?: Record<string, any>;
-  created_at: string;
-}
+import { useToast } from "../components/Toast";
 
 interface StrategyItem {
   id: string;
@@ -23,6 +13,7 @@ export default function BacktestListPage() {
   const navigate = useNavigate();
   const [jobs, setJobs] = useState<BacktestJob[]>([]);
   const [loading, setLoading] = useState(false);
+  const { toast } = useToast();
 
   const [showNew, setShowNew] = useState(false);
   const [strategies, setStrategies] = useState<StrategyItem[]>([]);
@@ -38,9 +29,15 @@ export default function BacktestListPage() {
 
   const loadJobs = async () => {
     setLoading(true);
-    const { data } = await backtestAPI.list();
-    setJobs(data);
-    setLoading(false);
+    try {
+      const { data } = await backtestAPI.list();
+      setJobs(data);
+    } catch (e: any) {
+      console.error("[BacktestListPage] loadJobs failed:", e);
+      toast(e.response?.data?.error || e.message || "加载回测列表失败", "error");
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -61,11 +58,11 @@ export default function BacktestListPage() {
 
   const submitBacktest = async () => {
     if (!selectedStrategy) {
-      alert("请选择策略");
+      toast("请选择策略", "error");
       return;
     }
     if (!fullMarketScan && selectedStocks.length === 0) {
-      alert("请至少选择一只股票，或开启全市场扫描");
+      toast("请至少选择一只股票，或开启全市场扫描", "error");
       return;
     }
     setSubmitting(true);
@@ -80,7 +77,7 @@ export default function BacktestListPage() {
       setShowNew(false);
       navigate(`/backtests/${data.id}`);
     } catch (e: any) {
-      alert(e.response?.data?.detail || "回测提交失败");
+      toast(e.response?.data?.error || e.response?.data?.detail || "回测提交失败", "error");
     } finally {
       setSubmitting(false);
     }
@@ -154,8 +151,8 @@ export default function BacktestListPage() {
 
       <div style={{ marginTop: "1rem", display: "flex", flexDirection: "column", gap: "0.75rem" }}>
         {jobs.map((job) => (
-          <Link key={job.id} to={`/backtests/${job.id}`} style={{ textDecoration: "none" }}>
-            <div className="card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div key={job.id} className="card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <Link to={`/backtests/${job.id}`} style={{ textDecoration: "none", flex: 1 }}>
               <div>
                 <span style={{ fontWeight: 600 }}>
                   {job.symbols?.slice(0, 3).join(", ") || "全市场扫描"}
@@ -176,6 +173,8 @@ export default function BacktestListPage() {
                   </span>
                 )}
               </div>
+            </Link>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
               <span
                 style={{
                   padding: "0.25rem 0.5rem",
@@ -198,8 +197,22 @@ export default function BacktestListPage() {
               >
                 {job.status}
               </span>
+              <button
+                className="secondary"
+                style={{ fontSize: "0.75rem", padding: "0.125rem 0.375rem", color: "#ef4444", borderColor: "#7f1d1d" }}
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  if (!confirm("确定删除该回测记录？")) return;
+                  try {
+                    await backtestAPI.remove(job.id);
+                    setJobs((prev) => prev.filter((j) => j.id !== job.id));
+                  } catch { toast("删除失败", "error"); }
+                }}
+              >
+                删除
+              </button>
             </div>
-          </Link>
+          </div>
         ))}
         {jobs.length === 0 && (
           <div className="card" style={{ textAlign: "center", color: "var(--muted)" }}>

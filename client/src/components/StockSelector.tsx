@@ -14,6 +14,8 @@ interface StockSelectorProps {
   onFullMarketScanChange: (value: boolean) => void;
   exchange?: string;
   onExchangeChange?: (exchange: string) => void;
+  excludeSt?: boolean;
+  onExcludeStChange?: (v: boolean) => void;
 }
 
 const EXCHANGES = [
@@ -28,6 +30,8 @@ export default function StockSelector({
   fullMarketScan,
   onFullMarketScanChange,
   exchange = "cn",
+  excludeSt = false,
+  onExcludeStChange,
   onExchangeChange,
 }: StockSelectorProps) {
   const [query, setQuery] = useState("");
@@ -72,7 +76,7 @@ export default function StockSelector({
           {fullMarketScan ? "按市值Top500扫描" : `已选 ${selectedStocks.length} 只标的`}
         </span>
       </div>
-      <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem" }}>
+      <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem", alignItems: "center" }}>
         <select
           value={exchange}
           onChange={(e) => onExchangeChange?.(e.target.value)}
@@ -82,6 +86,12 @@ export default function StockSelector({
             <option key={ex.value} value={ex.value}>{ex.label}</option>
           ))}
         </select>
+        {fullMarketScan && (
+          <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: "0.8125rem", cursor: "pointer", color: "var(--muted)", userSelect: "none" }}>
+            <input type="checkbox" checked={excludeSt} onChange={(e) => onExcludeStChange?.(e.target.checked)} style={{ accentColor: "#3b82f6" }} />
+            排除ST
+          </label>
+        )}
       </div>
       {!fullMarketScan && (
         <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.25rem" }}>

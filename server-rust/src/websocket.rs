@@ -56,22 +56,47 @@ pub async fn ws_backtest_handler(
     ws: WebSocketUpgrade,
     Path(job_id): Path<String>,
     State(state): State<Arc<AppState>>,
+    user: crate::middleware::auth::CurrentUser,
 ) -> Response {
-    ws.on_upgrade(move |socket| handle_ws_socket(socket, job_id, state))
+    ws.on_upgrade(move |socket| handle_ws_socket(socket, job_id, state, user.id))
 }
 
 /// 处理单个 WebSocket 连接
 ///
 /// 流程：
-/// 1. 发送连接成功确认
-/// 2. 订阅 Redis Pub/Sub 频道 `backtest:progress:{job_id}`
-/// 3. 循环：接收 Redis 消息 → 转发给 WebSocket 客户端
-/// 4. 同时处理客户端关闭/Ping 消息
+/// 1. 校验 job 归属（仅允许 job 所有者连接）
+/// 2. 发送连接成功确认
+/// 3. 订阅 Redis Pub/Sub 频道 `backtest:progress:{job_id}`
+/// 4. 循环：接收 Redis 消息 → 转发给 WebSocket 客户端
+/// 5. 同时处理客户端关闭/Ping 消息
 async fn handle_ws_socket(
     mut socket: WebSocket,
     job_id: String,
     state: Arc<AppState>,
+    user_id: uuid::Uuid,
 ) {
+    // Job ownership verification
+    let job_owner: Option<uuid::Uuid> = sqlx::query_scalar(
+        "SELECT user_id FROM backtest_jobs WHERE id = $1"
+    )
+    .bind(job_id.parse::<uuid::Uuid>().unwrap_or_default())
+    .fetch_optional(&state.db)
+    .await
+    .unwrap_or(None);
+
+    match job_owner {
+        Some(owner_id) if owner_id == user_id => {}
+        _ => {
+            let err_msg = serde_json::json!({
+                "type": "error",
+                "message": "Access denied: you do not own this job",
+            });
+            let _ = socket.send(axum::extract::ws::Message::Text(err_msg.to_string())).await;
+            let _ = socket.close().await;
+            return;
+        }
+    }
+
     info!("WebSocket connected for job: {}", job_id);
 
     // Send initial connection confirmation

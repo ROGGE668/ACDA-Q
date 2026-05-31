@@ -1,25 +1,30 @@
 import { create } from "zustand";
-import { Store } from "@tauri-apps/plugin-store";
+import { isTauri, BrowserStore, IStore } from "./web-compat";
+
+const isDev = import.meta.env.DEV;
 
 interface Settings {
   apiBase: string;
   theme: "dark" | "light";
-  globalShortcutEnabled: boolean;
 }
 
 interface SettingsState extends Settings {
   loaded: boolean;
   setApiBase: (v: string) => Promise<void>;
   setTheme: (v: "dark" | "light") => Promise<void>;
-  setGlobalShortcutEnabled: (v: boolean) => Promise<void>;
   loadSettings: () => Promise<void>;
 }
 
-let storeInstance: Store | null = null;
+let storeInstance: IStore | null = null;
 
-async function getStore(): Promise<Store> {
+async function getStore(): Promise<IStore> {
   if (!storeInstance) {
-    storeInstance = await Store.load("settings.json");
+    if (isTauri()) {
+      const { Store } = await import("@tauri-apps/plugin-store");
+      storeInstance = await Store.load("settings.json") as unknown as IStore;
+    } else {
+      storeInstance = new BrowserStore("settings");
+    }
   }
   return storeInstance;
 }
@@ -27,26 +32,25 @@ async function getStore(): Promise<Store> {
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   apiBase: import.meta.env.VITE_API_BASE || "",
   theme: "dark",
-  globalShortcutEnabled: true,
   loaded: false,
 
   loadSettings: async () => {
     try {
       const store = await getStore();
-      const apiBase = await store.get<string>("api_base");
-      const theme = await store.get<"dark" | "light">("theme");
-      const shortcut = await store.get<boolean>("global_shortcut_enabled");
+      const theme = await store.get("theme") as "dark" | "light" | undefined;
 
-      // 如果 Store 中的 api_base 有效，使用它；否则保持空字符串（让用户配置）
-      const validApiBase =
-        apiBase && !apiBase.includes("localhost") && !apiBase.includes("127.0.0.1")
-          ? apiBase
-          : get().apiBase;
+      // 生产环境：API 地址使用构建时注入的值，不从本地存储加载
+      let apiBase = import.meta.env.VITE_API_BASE || "";
+      if (isDev) {
+        const storedApiBase = await store.get("api_base");
+        if (storedApiBase) {
+          apiBase = storedApiBase;
+        }
+      }
 
       set({
-        apiBase: validApiBase,
+        apiBase,
         theme: theme ?? get().theme,
-        globalShortcutEnabled: shortcut ?? get().globalShortcutEnabled,
         loaded: true,
       });
     } catch (e) {
@@ -56,6 +60,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 
   setApiBase: async (v) => {
+    // 生产环境不允许修改 API 地址
+    if (!isDev) return;
     try {
       const store = await getStore();
       await store.set("api_base", v);
@@ -78,14 +84,5 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     }
   },
 
-  setGlobalShortcutEnabled: async (v) => {
-    try {
-      const store = await getStore();
-      await store.set("global_shortcut_enabled", v);
-      await store.save();
-      set({ globalShortcutEnabled: v });
-    } catch (e) {
-      console.error("Failed to save shortcut setting:", e);
-    }
-  },
+
 }));

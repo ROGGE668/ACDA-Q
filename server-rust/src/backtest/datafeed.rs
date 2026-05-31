@@ -32,13 +32,18 @@ pub async fn load_daily_bars(
     start_date: &str,
     end_date: &str,
 ) -> Result<Vec<Bar>, AppError> {
+    // 去除 symbol 后缀（如 000001.SZ → 000001）
+    let clean_symbols: Vec<String> = symbols.iter().map(|s| {
+        s.split('.').next().unwrap_or(s).to_string()
+    }).collect();
+
     let rows: Vec<DailyBarRow> = sqlx::query_as(
         "SELECT symbol, datetime, open, high, low, close, volume, pre_close
          FROM daily_bars
-         WHERE symbol = ANY($1) AND datetime BETWEEN $2 AND $3
+         WHERE symbol = ANY($1) AND datetime >= $2::date AND datetime < $3::date + interval '1 day'
          ORDER BY datetime, symbol"
     )
-    .bind(symbols)
+    .bind(&clean_symbols)
     .bind(start_date)
     .bind(end_date)
     .fetch_all(pool)
@@ -53,7 +58,7 @@ pub async fn load_daily_bars(
             high: r.high,
             low: r.low,
             close: r.close,
-            volume: r.volume as u64,
+            volume: r.volume.max(0) as u64,
             pre_close: r.pre_close.unwrap_or(r.close),
             is_st: false,
         })
@@ -70,6 +75,62 @@ pub async fn load_symbol_bars(
     end_date: &str,
 ) -> Result<Vec<Bar>, AppError> {
     load_daily_bars(pool, &[symbol.to_string()], start_date, end_date).await
+}
+
+/// 从 TimescaleDB 加载分钟级 K 线数据
+pub async fn load_minute_bars(
+    pool: &DbPool,
+    symbols: &[String],
+    start_date: &str,
+    end_date: &str,
+    period: &str,
+) -> Result<Vec<Bar>, AppError> {
+    let clean_symbols: Vec<String> = symbols.iter().map(|s| {
+        s.split('.').next().unwrap_or(s).to_string()
+    }).collect();
+
+    #[derive(Debug, FromRow)]
+    struct MinuteBarRow {
+        symbol: String,
+        datetime: chrono::DateTime<chrono::Utc>,
+        open: Decimal,
+        high: Decimal,
+        low: Decimal,
+        close: Decimal,
+        volume: i64,
+        amount: Option<Decimal>,
+    }
+
+    let rows: Vec<MinuteBarRow> = sqlx::query_as(
+        "SELECT symbol, datetime, open, high, low, close, volume, amount
+         FROM minute_bars
+         WHERE symbol = ANY($1) AND period = $2
+           AND datetime >= $3::timestamp AND datetime < $4::timestamp + interval '1 day'
+         ORDER BY datetime, symbol"
+    )
+    .bind(&clean_symbols)
+    .bind(period)
+    .bind(start_date)
+    .bind(end_date)
+    .fetch_all(pool)
+    .await?;
+
+    let bars = rows
+        .into_iter()
+        .map(|r| Bar {
+            symbol: r.symbol,
+            timestamp: r.datetime.naive_utc(),
+            open: r.open,
+            high: r.high,
+            low: r.low,
+            close: r.close,
+            volume: r.volume.max(0) as u64,
+            pre_close: r.close, // 分钟线无 pre_close，用 close 兜底
+            is_st: false,
+        })
+        .collect();
+
+    Ok(bars)
 }
 
 #[cfg(test)]

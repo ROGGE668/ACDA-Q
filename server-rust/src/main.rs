@@ -75,12 +75,16 @@ async fn run_api_server() -> anyhow::Result<()> {
     let ts_db = create_timescale_pool(&settings).await?;
     info!("Database pools initialized");
 
-    sqlx::migrate!("./migrations")
-        .run(&db)
-        .await
-        .unwrap_or_else(|e| {
-            tracing::warn!("Migration skipped or failed: {}", e);
-        });
+    match sqlx::migrate!("./migrations").run(&db).await {
+        Ok(_) => info!("Database migrations applied successfully"),
+        Err(e) => {
+            if settings.debug {
+                tracing::warn!("Migration skipped (debug mode): {}", e);
+            } else {
+                return Err(anyhow::anyhow!("Database migration failed: {}", e));
+            }
+        }
+    }
 
     let queue = Arc::new(
         Queue::new(&settings.redis_url, "acda_q:backtest")

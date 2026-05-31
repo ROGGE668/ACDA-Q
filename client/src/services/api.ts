@@ -42,6 +42,9 @@ function generateRequestId(): string {
 
 import { getDeviceFingerprint } from "../utils/fingerprint";
 
+// Token refresh mutex - prevents concurrent refresh requests
+let refreshPromise: Promise<boolean> | null = null;
+
 // 浏览器中使用原生 fetch（带 cookie），Tauri 中使用 plugin-http
 async function compatFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   if (isTauri()) {
@@ -96,33 +99,41 @@ async function request(method: string, url: string, data?: any, config?: any) {
 
     if (response.status === 401) {
       if (!config?._retry) {
-        try {
-          const refreshTok = await getRefreshToken();
-          if (refreshTok) {
-            const refreshRes = await compatFetch(`${API_BASE}/auth/refresh`, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                ...(isTauri() ? { "Authorization": `Bearer ${refreshTok}` } : {}),
-              },
-              body: JSON.stringify({ refresh_token: refreshTok }),
-            });
-            if (refreshRes.ok) {
-              const refreshData = await refreshRes.json();
-              if (refreshData.access_token && refreshData.refresh_token) {
-                await setTokens(refreshData.access_token, refreshData.refresh_token);
+        // Use mutex: only one refresh at a time, others wait on the same promise
+        if (!refreshPromise) {
+          refreshPromise = (async () => {
+            try {
+              const refreshTok = await getRefreshToken();
+              if (!refreshTok) return false;
+              const refreshRes = await compatFetch(`${API_BASE}/auth/refresh`, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  ...(isTauri() ? { "Authorization": `Bearer ${refreshTok}` } : {}),
+                },
+                body: JSON.stringify({ refresh_token: refreshTok }),
+              });
+              if (refreshRes.ok) {
+                const refreshData = await refreshRes.json();
+                if (refreshData.access_token && refreshData.refresh_token) {
+                  await setTokens(refreshData.access_token, refreshData.refresh_token);
+                  return true;
+                }
               }
-              return request(method, url, data, { ...config, _retry: true });
+              return false;
+            } catch (e) {
+              debug("Refresh failed", e);
+              return false;
             }
-          }
-        } catch (e) {
-          debug("Refresh failed", e);
+          })();
+        }
+        const success = await refreshPromise;
+        refreshPromise = null;
+        if (success) {
+          return request(method, url, data, { ...config, _retry: true });
         }
         await clearTokens();
-        const confirmed = window.confirm("登录已过期，请重新登录。\n\n点击\"确定\"跳转到登录页面。");
-        if (confirmed) {
-          window.location.href = "/login";
-        }
+        window.location.href = "/login";
         throw new Error("Session expired");
       }
     }
